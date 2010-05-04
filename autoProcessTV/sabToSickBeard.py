@@ -20,6 +20,25 @@
 
 
 import sys
+# This script does not work well with the current default python path SabNZBD sets
+# Set it to the same python path as OS X defaults
+osx_python_path = [
+    sys.path[0],
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python26.zip",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/plat-darwin",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/plat-mac",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/plat-mac/lib-scriptpackages",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/Extras/lib/python",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/lib-tk",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/lib-old",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/lib/python2.6/lib-dynload",
+    "/Library/Python/2.6/site-packages",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/Extras/lib/python/PyObjC",
+    "/System/Library/Frameworks/Python.framework/Versions/2.6/Extras/lib/python/wx-2.8-mac-unicode"
+]
+
+sys.path = osx_python_path
 import autoProcessTV
 
 if len(sys.argv) < 2:
