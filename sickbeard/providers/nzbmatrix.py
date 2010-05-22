@@ -44,7 +44,7 @@ def downloadNZB (nzb):
 
 	logger.log("Downloading an NZB from NZBMatrix at " + nzb.url)
 
-	fileName = os.path.join(sickbeard.NZB_DIR, nzb.extraInfo[0] + ".nzb")
+	fileName = os.path.join(sickbeard.NZB_DIR, nzb.extraInfo[0] + ".nzb.gz")
 	
 	logger.log("Saving to " + fileName, logger.DEBUG)
 
@@ -102,7 +102,7 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 	# if we got some results then use them no matter what.
 	# OR
 	# return anyway unless we're doing a backlog or manual search
-	if nzbResults or not (episode.status == BACKLOG or manualSearch):
+	if nzbResults or not (episode.status in (BACKLOG, MISSED) or manualSearch):
 		return nzbResults
 	
 	sceneSearchStrings = set(sickbeard.helpers.makeSceneSearchString(episode))
@@ -113,7 +113,7 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 
 		for resultDict in _doSearch(curString, quality):
 
-			if epQuality == HD and "720p" not in resultDict["NZBNAME"]:
+			if epQuality == HD and ("720p" not in resultDict["NZBNAME"] or "itouch" in resultDict["NZBNAME"].lower()):
 				logger.log("Ignoring result "+resultDict["NZBNAME"]+" because it doesn't contain 720p in the name", logger.DEBUG)
 				continue
 
@@ -218,9 +218,13 @@ class NZBMatrixCache(tvcache.TVCache):
 		
 		logger.log("NZBMatrix cache update URL: "+ url, logger.DEBUG)
 		
-		f = urllib.urlopen(url)
-		data = "".join(f.readlines())
-		f.close()
+		try:
+			f = urllib.urlopen(url)
+			data = "".join(f.readlines())
+			f.close()
+		except IOError, e:
+			logger.log("Unable to load RSS feed from NZBMatrix, skipping: "+str(e), logger.ERROR)
+			return []
 		
 		# as long as the http request worked we count this as an update
 		if data:
@@ -234,7 +238,7 @@ class NZBMatrixCache(tvcache.TVCache):
 			responseSoup = etree.ElementTree(etree.XML(data))
 			items = responseSoup.getiterator('item')
 		except Exception, e:
-			logger.log("Error trying to load TVBinz RSS feed: "+str(e), logger.ERROR)
+			logger.log("Error trying to load NZBMatrix RSS feed: "+str(e), logger.ERROR)
 			return []
 			
 		for item in items:

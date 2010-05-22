@@ -51,28 +51,6 @@ you want them to be searched<br />
 </div>
 
 
-<div class="EntryBlock">
-<fieldset class="EntryFieldSet">
-
-<legend>Newzbin</legend>
-
-<input type="checkbox" name="newzbin" id="newzbin_active" class="provider_active" #if $sickbeard.NEWZBIN then "CHECKED" else ""#> <strong>Enable Newzbin</strong>
-<a href="http://www.newzbin.com" class="imgLink" target="_new"><img src="$sbRoot/images/providers/newzbin.gif" alt="Newzbin" width="16" height="16"></a><br />
-Check to search Newzbin for episodes<br />
-<br />
-
-<strong>Username:</strong><br />
-Newzbin username<br />
-<input type="text" name="newzbin_username" value="$sickbeard.NEWZBIN_USERNAME" size="10"><br />
-<br />
-
-<strong>Password:</strong><br />
-Newzbin password<br />
-<input type="password" name="newzbin_password" value="$sickbeard.NEWZBIN_PASSWORD" size="10"><br />
-<br />
-
-</fieldset>
-</div>
 #if $sickbeard.SHOW_TVBINZ
 <div class="EntryBlock">
 <fieldset class="EntryFieldSet">
@@ -136,21 +114,35 @@ NZBs.org hash<br />
 <div class="EntryBlock">
 <fieldset class="EntryFieldSet">
 
-<legend>NZBMatrix</legend>
+<legend>NZBs'R'US</legend>
 
-<input type="checkbox" name="nzbmatrix" #if $sickbeard.NZBMATRIX then "CHECKED" else ""#> <strong>Enable NZBMatrix</strong>
-<a href="http://www.nzbmatrix.com" class="imgLink" target="_new"><img src="$sbRoot/images/providers/nzbmatrix.gif" alt="NZBMatrix" width="16" height="16"></a><br />
-Check to search NZBMatrix for episodes<br />
+<input type="checkbox" name="nzbsrus" #if $sickbeard.NZBSRUS then "CHECKED" else ""#> <strong>Enable NZBs'R'US</strong>
+<a href="http://www.nzbsrus.com" class="imgLink" target="_new"><img src="$sbRoot/images/providers/nzbsrus.gif" alt="NZBs'R'US" width="16" height="16"></a><br />
+Check to search NZBsRus.com for episodes<br />
 <br />
 
-<strong>Username:</strong><br />
-NZBMatrix UID<br />
-<input type="text" name="nzbmatrix_username" value="$sickbeard.NZBMATRIX_USERNAME" size="6"><br />
+<strong>UID:</strong><br />
+NZBs'R'US UID<br />
+<input type="text" name="nzbsrus_uid" value="$sickbeard.NZBSRUS_UID" size="6"><br />
 <br />
 
-<strong>API Key:</strong><br />
-NZBMatrix API Key<br />
-<input type="text" name="nzbmatrix_apikey" value="$sickbeard.NZBMATRIX_APIKEY" size="35"><br />
+<strong>Hash:</strong><br />
+NZBs'R'US hash<br />
+<input type="text" name="nzbsrus_hash" value="$sickbeard.NZBSRUS_HASH" size="35"><br />
+<br />
+
+</fieldset>
+</div>
+
+
+<div class="EntryBlock">
+<fieldset class="EntryFieldSet">
+
+<legend>Bin-Req</legend>
+
+<input type="checkbox" name="binreq" #if $sickbeard.BINREQ then "CHECKED" else ""#> <strong>Enable Bin-Req</strong>
+<a href="http://www.bin-req.com" class="imgLink" target="_new"><img src="$sbRoot/images/providers/binreq.gif" alt="NZBs'R'US" width="16" height="16"></a><br />
+Check to search NZBs.org for episodes<br />
 <br />
 
 </fieldset>
@@ -161,12 +153,23 @@ NZBMatrix API Key<br />
 <div class="EntryBlock">
 <fieldset class="EntryFieldSet">
 
-<legend>TVNZB</legend>
+<legend>NZBMatrix</legend>
 
-<input type="checkbox" name="tvnzb" #if $sickbeard.TVNZB then "CHECKED" else ""#> <strong>Enable TVNZB</strong>
-<a href="http://www.tvnzb.com" class="imgLink" target="_new"><img src="$sbRoot/images/providers/tvnzb.gif" alt="TVNZB" width="16" height="16"></a><br />
-Check to search TVNZB for episodes<br />
+<input type="checkbox" name="nzbmatrix" #if $sickbeard.NZBMATRIX then "CHECKED" else ""#> <strong>Enable NZBMatrix</strong>
+<a href="http://www.nzbmatrix.com" class="imgLink" target="_new"><img src="$sbRoot/images/providers/nzbmatrix.gif" alt="NZBMatrix" width="16" height="16"></a><br />
+Check to search NZBMatrix for episodes<br />
 <br />
+
+<strong>Username:</strong><br />
+NZBMatrix username<br />
+<input type="text" name="nzbmatrix_username" value="$sickbeard.NZBMATRIX_USERNAME" size="6"><br />
+<br />
+
+<strong>API Key:</strong><br />
+NZBMatrix API Key<br />
+<input type="text" name="nzbmatrix_apikey" value="$sickbeard.NZBMATRIX_APIKEY" size="35"><br />
+<br />
+
 </fieldset>
 </div>
 

@@ -16,35 +16,33 @@
 # You should have received a copy of the GNU General Public License
 # along with Sick Beard.  If not, see <http://www.gnu.org/licenses/>.
 
+
+
 import urllib
 import urllib2
 import os.path
 import sys
-import sqlite3
-import time
 import datetime
-
-from lib.tvnamer.utils import FileParser
-from lib.tvnamer import tvnamer_exceptions
+import time
 
 import xml.etree.cElementTree as etree
 
 import sickbeard
-from sickbeard import helpers, classes
-from sickbeard import db
-from sickbeard import tvcache
-from sickbeard import exceptions
 
+from sickbeard import helpers, classes
+
+from sickbeard import exceptions
 from sickbeard.common import *
 from sickbeard import logger
+from sickbeard import tvcache
 
 providerType = "nzb"
-providerName = "TVNZB"
+providerName = "NZBsRUS"
 
 def isActive():
-	return sickbeard.TVNZB and sickbeard.USE_NZB
+	return sickbeard.NZBSRUS and sickbeard.USE_NZB
 
-def getTVNZBURL (url):
+def getNZBsURL (url):
 
 	result = None
 
@@ -52,7 +50,7 @@ def getTVNZBURL (url):
 		f = urllib2.urlopen(url)
 		result = "".join(f.readlines())
 	except (urllib.ContentTooShortError, IOError), e:
-		logger.log("Error loading TVNZB URL: " + str(sys.exc_info()) + " - " + str(e), logger.ERROR)
+		logger.log("Error loading NZBs'R'US URL: " + str(sys.exc_info()) + " - " + str(e), logger.ERROR)
 		return None
 
 	return result
@@ -60,9 +58,9 @@ def getTVNZBURL (url):
 						
 def downloadNZB (nzb):
 
-	logger.log("Downloading an NZB from NZBs.org at " + nzb.url)
+	logger.log("Downloading an NZB from NZBs'R'US at " + nzb.url)
 
-	data = getTVNZBURL(nzb.url)
+	data = getNZBsURL(nzb.url)
 	
 	if data == None:
 		return False
@@ -77,13 +75,17 @@ def downloadNZB (nzb):
 
 	return True
 	
+	
 def findEpisode (episode, forceQuality=None, manualSearch=False):
 
 	if episode.status == DISCBACKLOG:
-		logger.log("TVNZB doesn't support disc backlog. Use Newzbin or download it manually from TVNZB")
+		logger.log("NZBs'R'US doesn't support disc backlog. Use newzbin or download it manually from NZBs'R'US")
 		return []
 
-	logger.log("Searching TVNZB for " + episode.prettyName(True))
+	if sickbeard.NZBSRUS_UID in (None, "") or sickbeard.NZBSRUS_HASH in (None, ""):
+		raise exceptions.AuthException("NZBs'R'US authentication details are empty, check your config")
+
+	logger.log("Searching NZBs'R'US for " + episode.prettyName(True))
 
 	if forceQuality != None:
 		epQuality = forceQuality
@@ -92,8 +94,7 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 	else:
 		epQuality = episode.show.quality
 	
-	myCache = TVNZBCache()
-	
+	myCache = NZBsRUSCache()
 	myCache.updateCache()
 	
 	cacheResults = myCache.searchCache(episode.show, episode.season, episode.episode, epQuality)
@@ -109,7 +110,7 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 		logger.log("Found result " + title + " at " + url)
 
 		result = classes.NZBSearchResult(episode)
-		result.provider = 'tvnzb'
+		result.provider = providerName.lower()
 		result.url = url 
 		result.extraInfo = [title]
 		result.quality = epQuality
@@ -118,34 +119,37 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 
 	return nzbResults
 		
+
 def findPropers(date=None):
 
-	results = TVNZBCache().listPropers(date)
+	results = NZBsRUSCache().listPropers(date)
 	
 	return [classes.Proper(x['name'], x['url'], datetime.datetime.fromtimestamp(x['time'])) for x in results]
-	
 
-
-class TVNZBCache(tvcache.TVCache):
+class NZBsRUSCache(tvcache.TVCache):
 	
 	def __init__(self):
 
-		# only poll TVNZB every 10 minutes at the most
-		self.minTime = 10
+		# only poll NZBs'R'US every 15 minutes max
+		self.minTime = 15
 		
-		tvcache.TVCache.__init__(self, "tvnzb")
+		tvcache.TVCache.__init__(self, providerName.lower())
 	
 	def updateCache(self):
 
 		if not self.shouldUpdate():
 			return
-			
-		# get all records since the last timestamp
-		url = "http://www.tvnzb.com/tvnzb_new.rss"
 		
-		logger.log("TVNZB cache update URL: "+ url, logger.DEBUG)
+		url = 'http://www.nzbsrus.com/rssfeed.php?'
+		urlArgs = {'cat': '91,75',
+				   'i': sickbeard.NZBSRUS_UID,
+				   'h': sickbeard.NZBSRUS_HASH}
+
+		url += urllib.urlencode(urlArgs)
 		
-		data = getTVNZBURL(url)
+		logger.log("NZBs'R'US cache update URL: "+ url, logger.DEBUG)
+		
+		data = getNZBsURL(url)
 		
 		# as long as the http request worked we count this as an update
 		if data:
@@ -155,28 +159,32 @@ class TVNZBCache(tvcache.TVCache):
 		logger.log("Clearing cache and updating with new information")
 		self._clearCache()
 		
+		if data == 'Invalid Link':
+			raise exceptions.AuthException("Your UID/hash for NZBs'R'US is incorrect.")
+		
 		try:
-			responseSoup = etree.ElementTree(element = etree.XML(data))
-		except (SyntaxError, TypeError), e:
-			logger.log("Invalid XML returned by TVNZB: " + str(sys.exc_info()) + " - " + str(e), logger.ERROR)
-			return
-
-		items = responseSoup.getiterator('item')
+			responseSoup = etree.ElementTree(etree.XML(data))
+			items = responseSoup.getiterator('item')
+		except Exception, e:
+			logger.log("Error trying to load NZBs'R'US RSS feed: "+str(e), logger.ERROR)
+			return []
 			
 		for item in items:
 
-			if item.findtext('title') == None or item.findtext('link') == None:
-				logger.log("The XML returned from the TVNZB RSS feed is incomplete, this result is unusable: "+str(item), logger.ERROR)
-				continue
-
 			title = item.findtext('title')
-			desc = item.findtext('description')
 			url = item.findtext('link')
+
+			if not title or not url:
+				logger.log("The XML returned from the NZBs'R'US RSS feed is incomplete, this result is unusable: "+data, logger.ERROR)
+				continue
+			
+			if "subpack" in title.lower():
+				logger.log("This result appears to be a subtitle pack, ignoring: "+title, logger.ERROR)
+				continue
+			
+			url = url.replace('&amp;','&')
 
 			logger.log("Adding item from RSS to cache: "+title, logger.DEBUG)			
 
-			season = int(item.findtext('season'))
-			episode = int(item.findtext('episode'))
+			self._addCacheEntry(title, url)
 
-			self._addCacheEntry(title, url, season, [episode], extraNames=[desc])
-				

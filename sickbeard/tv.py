@@ -78,7 +78,7 @@ class TVShow(object):
             
             self._isDirGood = False
             
-            logger.log("The show dir doesn't exist! This show will be inactive until the dir is created.", logger.ERROR)
+            logger.log("The show dir "+self._location+" doesn't exist! This show will be inactive until the dir is created.", logger.ERROR)
             
             myDB = db.DBConnection()
             sqlResults = myDB.select("SELECT * FROM tv_shows WHERE location = ?", [self._location])
@@ -627,7 +627,7 @@ class TVShow(object):
             else:
                 raise exceptions.NoNFOException("Empty <id> or <tvdbid> field in NFO")
 
-        except (exceptions.NoNFOException, SyntaxError), e:
+        except (exceptions.NoNFOException, SyntaxError, ValueError), e:
             logger.log("There was an error parsing your existing tvshow.nfo file: " + str(e), logger.ERROR)
             logger.log("Attempting to rename it to tvshow.nfo.old", logger.DEBUG)
 

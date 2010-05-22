@@ -65,6 +65,20 @@ def renameFile(curFile, newName):
 
     return newFilename
 
+def copyFile(srcFile, destFile):
+    shutil.copyfile(srcFile, destFile)
+    try:
+        shutil.copymode(srcFile, destFile)
+    except OSError:
+        pass
+
+def moveFile(srcFile, destFile):
+    try:
+        os.rename(srcFile, destFile)
+    except OSError:
+        copyFile(srcFile, destFile)
+        os.unlink(srcFile)
+
 
 # #########################
 # Find the file we're dealing with
@@ -112,6 +126,11 @@ def _checkForExistingFile(newFile, oldFile):
 
 def findInHistory(nzbName):
 
+    nzbName = nzbName.rpartition(".")[0]
+    
+    if not nzbName:
+        return None
+    
     myDB = db.DBConnection()
     sqlResults = myDB.select("SELECT * FROM history WHERE resource = ?", [nzbName])
     
@@ -127,7 +146,7 @@ def logHelper (logMessage, logLevel=logger.MESSAGE):
     return logMessage + "\n"
 
 
-def processDir (dirName, recurse=False):
+def processDir (dirName, nzbName=None, recurse=False):
 
     returnStr = ''
 
@@ -157,7 +176,7 @@ def processDir (dirName, recurse=False):
     myDB = db.DBConnection()
     sqlResults = myDB.select("SELECT * FROM tv_shows")
     for sqlShow in sqlResults:
-        if dirName.startswith(ek.ek(os.path.realpath, sqlShow["location"])+os.sep) or dirName == ek.ek(os.path.realpath, sqlShow["location"]):
+        if dirName.lower().startswith(ek.ek(os.path.realpath, sqlShow["location"]).lower()+os.sep) or dirName.lower() == ek.ek(os.path.realpath, sqlShow["location"]).lower():
             returnStr += logHelper("You're trying to post process an episode that's already been moved to its show dir", logger.ERROR)
             return returnStr
 
@@ -170,7 +189,7 @@ def processDir (dirName, recurse=False):
     # recursively process all the folders
     for curFolder in folders:
         returnStr += logHelper("Recursively processing a folder: "+curFolder, logger.DEBUG)
-        returnStr += processDir(ek.ek(os.path.join, dirName, curFolder), True)
+        returnStr += processDir(ek.ek(os.path.join, dirName, curFolder), recurse=True)
 
     remainingFolders = filter(lambda x: ek.ek(os.path.isdir, ek.ek(os.path.join, dirName, x)), fileList)
 
@@ -182,7 +201,7 @@ def processDir (dirName, recurse=False):
         # if there's only one video file in the dir we can use the dirname to process too
         if len(videoFiles) == 1:
             returnStr += logHelper("Auto processing file: "+curFile+" ("+dirName+")")
-            result = processFile(curFile, dirName)
+            result = processFile(curFile, dirName, nzbName)
 
             # as long as the postprocessing was successful delete the old folder unless the config wants us not to
             if type(result) == list:
@@ -207,7 +226,7 @@ def processDir (dirName, recurse=False):
             
         else:
             returnStr += logHelper("Auto processing file: "+curFile)
-            result = processFile(curFile)
+            result = processFile(curFile, None, nzbName)
             if type(result) == list:
                 returnStr += result[0]
                 returnStr += logHelper("Processing succeeded for "+curFile)
@@ -217,70 +236,6 @@ def processDir (dirName, recurse=False):
 
     return returnStr
             
-
-
-def postProcessDir(downloaderDir, nzbName=None):
-    
-    returnStr = ''
-
-    downloadDir = ''
-
-    # if they passed us a real dir then assume it's the one we want
-    if os.path.isdir(downloaderDir):
-        downloadDir = os.path.abspath(downloaderDir)
-    
-    # if they've got a download dir configured then use it
-    elif sickbeard.TV_DOWNLOAD_DIR != '' and os.path.isdir(sickbeard.TV_DOWNLOAD_DIR):
-        downloadDir = ek.ek(os.path.join, sickbeard.TV_DOWNLOAD_DIR, os.path.abspath(downloaderDir).split(os.path.sep)[-1])
-        returnStr += logHelper("Trying to use folder "+downloadDir, logger.DEBUG)
-
-    # if we didn't find a real dir then quit
-    if not ek.ek(os.path.isdir, downloadDir):
-        returnStr += logHelper("Unable to figure out what folder to process. If your downloader and Sick Beard aren't on the same PC make sure you fill out your TV download dir in the config.", logger.DEBUG)
-        return returnStr
-
-    # make sure the dir isn't inside a show dir
-    myDB = db.DBConnection()
-    sqlResults = myDB.select("SELECT * FROM tv_shows")
-    for sqlShow in sqlResults:
-        if downloadDir.startswith(os.path.abspath(sqlShow["location"])+os.sep):
-            returnStr += logHelper("You're trying to post process a show that's already been moved to its show dir", logger.ERROR)
-            return returnStr
-
-    returnStr += logHelper("Final folder name is " + downloadDir, logger.DEBUG)
-    
-    # TODO: check if it's failed and deal with it if it is
-    if downloadDir.startswith('_FAILED_'):
-        returnStr += logHelper("The directory name indicates it failed to extract, cancelling", logger.DEBUG)
-        return returnStr
-    
-    # find the file we're dealing with
-    biggest_file = findMainFile(downloadDir)
-    if biggest_file == None:
-        returnStr += logHelper("Unable to find the biggest file - is this really a TV download?", logger.DEBUG)
-        return returnStr
-        
-    returnStr += logHelper("The biggest file in the dir is: " + biggest_file, logger.DEBUG)
-
-    result = processFile(biggest_file, downloadDir, nzbName)
-
-    # a successful post-processing will return a list with a string in it
-    # if it's not successful then I just return right now
-    if type(result) in (str, unicode):
-        return returnStr + result
-
-    returnStr += result[0]
-
-    # delete the old folder unless the config wants us not to
-    if not sickbeard.KEEP_PROCESSED_DIR and not sickbeard.KEEP_PROCESSED_FILE:
-        returnStr += logHelper("Deleting folder " + downloadDir, logger.DEBUG)
-        
-        try:
-            shutil.rmtree(downloadDir)
-        except (OSError, IOError), e:
-            returnStr += logHelper("Warning: unable to remove the folder " + downloadDir + ": " + str(e), logger.ERROR)
-
-    return returnStr
 
 def processFile(fileName, downloadDir=None, nzbName=None):
 
@@ -340,6 +295,7 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             continue
 
         try:
+            returnStr += logHelper("Looking up name "+result.seriesname+" on TVDB", logger.DEBUG)
             t = tvdb_api.Tvdb(custom_ui=classes.ShowListUI, **sickbeard.TVDB_API_PARMS)
             showObj = t[result.seriesname]
             showInfo = (int(showObj["id"]), showObj["seriesname"])
@@ -348,7 +304,8 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             returnStr += logHelper("TVDB didn't respond, trying to look up the show in the DB instead: "+str(e), logger.DEBUG)
             showInfo = helpers.searchDBForShow(result.seriesname)
 
-        tvdb_id = showInfo[0]
+        if showInfo:
+            tvdb_id = showInfo[0]
             
         # if we couldn't get the necessary info from either of the above methods, try the next name
         if tvdb_id == None or season == None or episodes == []:
@@ -401,14 +358,6 @@ def processFile(fileName, downloadDir=None, nzbName=None):
         else:
             rootEp.relatedEps.append(curEp)
 
-    # log it to history
-    history.logDownload(rootEp, fileName)
-
-    # wait for the copy to finish
-
-    notifiers.notify(NOTIFY_DOWNLOAD, rootEp.prettyName(True))
-
-
     # figure out the new filename
     biggestFileName = os.path.basename(fileName)
     biggestFileExt = os.path.splitext(biggestFileName)[1]
@@ -439,6 +388,7 @@ def processFile(fileName, downloadDir=None, nzbName=None):
 
     destDir = os.path.join(rootEp.show.location, seasonFolder)
     
+    curFile = os.path.join(destDir, biggestFileName)
     newFile = os.path.join(destDir, helpers.sanitizeFileName(rootEp.prettyName())+biggestFileExt)
     returnStr += logHelper("The ultimate destination for " + fileName + " is " + newFile, logger.DEBUG)
 
@@ -470,7 +420,7 @@ def processFile(fileName, downloadDir=None, nzbName=None):
     if sickbeard.KEEP_PROCESSED_FILE:
         returnStr += logHelper("Copying from " + fileName + " to " + destDir, logger.DEBUG)
         try:
-            shutil.copy(fileName, destDir)
+            copyFile(fileName, curFile)
            
             returnStr += logHelper("File was copied successfully", logger.DEBUG)
             
@@ -482,12 +432,8 @@ def processFile(fileName, downloadDir=None, nzbName=None):
 
         returnStr += logHelper("Moving from " + fileName + " to " + destDir, logger.DEBUG)
         try:
-            # try using rename to move it because shutil.move is bugged in python 2.5
-            try:
-                os.rename(fileName, os.path.join(destDir, os.path.basename(fileName)))
-            except OSError:
-                shutil.move(fileName, destDir)
-           
+            moveFile(fileName, curFile)
+            
             returnStr += logHelper("File was moved successfully", logger.DEBUG)
             
         except (Error, IOError, OSError), e:
@@ -511,10 +457,6 @@ def processFile(fileName, downloadDir=None, nzbName=None):
         
         os.remove(existingFile)
             
-            
-
-    curFile = os.path.join(destDir, biggestFileName)
-
     if sickbeard.RENAME_EPISODES:
         try:
             os.rename(curFile, newFile)
@@ -535,6 +477,11 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             if curEp.status != PREDOWNLOADED:
                 curEp.status = DOWNLOADED
             curEp.saveToDB()
+
+    # log it to history
+    history.logDownload(rootEp, fileName)
+
+    notifiers.notify(NOTIFY_DOWNLOAD, rootEp.prettyName(True))
 
     
     # generate nfo/tbn

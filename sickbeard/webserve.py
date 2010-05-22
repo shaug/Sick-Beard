@@ -491,21 +491,16 @@ class ConfigProviders:
 
     
     @cherrypy.expose
-    def saveProviders(self, newzbin=None, newzbin_username=None, newzbin_password=None, tvbinz=None,
-                   tvbinz_uid=None, tvbinz_hash=None, nzbs=None, nzbs_uid=None, nzbs_hash=None,
-                   nzbmatrix=None, nzbmatrix_username=None, nzbmatrix_apikey=None, tvnzb=None,
-                   tvbinz_auth=None, tvbinz_sabuid=None, provider_order=None):
+    def saveProviders(self, tvbinz=None, tvbinz_uid=None, tvbinz_hash=None, nzbs=None, nzbs_uid=None,
+                      nzbs_hash=None, nzbmatrix=None, nzbmatrix_username=None, nzbmatrix_apikey=None,
+                      tvbinz_auth=None, tvbinz_sabuid=None, provider_order=None, nzbsrus=None,
+                      nzbsrus_uid=None, nzbsrus_hash=None, binreq=None):
 
         results = []
 
-        if newzbin == "on":
-            newzbin = 1
-        else:
-            newzbin = 0
-            
         if tvbinz == "on":
             tvbinz = 1
-        elif tvbinz != None:
+        elif sickbeard.SHOW_TVBINZ:
             tvbinz = 0
             
         if nzbs == "on":
@@ -513,19 +508,20 @@ class ConfigProviders:
         else:
             nzbs = 0
 
+        if nzbsrus == "on":
+            nzbsrus = 1
+        else:
+            nzbsrus = 0
+
         if nzbmatrix == "on":
             nzbmatrix = 1
         else:
             nzbmatrix = 0
 
-        if tvnzb == "on":
-            tvnzb = 1
+        if binreq == "on":
+            binreq = 1
         else:
-            tvnzb = 0
-
-        sickbeard.NEWZBIN = newzbin
-        sickbeard.NEWZBIN_USERNAME = newzbin_username
-        sickbeard.NEWZBIN_PASSWORD = newzbin_password
+            binreq = 0
 
         if tvbinz != None:
             sickbeard.TVBINZ = tvbinz
@@ -542,11 +538,15 @@ class ConfigProviders:
         sickbeard.NZBS_UID = nzbs_uid
         sickbeard.NZBS_HASH = nzbs_hash
         
+        sickbeard.NZBSRUS = nzbsrus
+        sickbeard.NZBSRUS_UID = nzbsrus_uid
+        sickbeard.NZBSRUS_HASH = nzbsrus_hash
+        
         sickbeard.NZBMATRIX = nzbmatrix
         sickbeard.NZBMATRIX_USERNAME = nzbmatrix_username
         sickbeard.NZBMATRIX_APIKEY = nzbmatrix_apikey
         
-        sickbeard.TVNZB = tvnzb
+        sickbeard.BINREQ = binreq
         
         sickbeard.PROVIDER_ORDER = provider_order.split()
         
@@ -1337,8 +1337,8 @@ class Home:
                         logger.log("Refusing to change status of "+curEp+" because it is UNAIRED", logger.ERROR)
                         continue
                     
-                    if int(status) == DOWNLOADED and epObj.status not in (PREDOWNLOADED, SNATCHED_PROPER):
-                        logger.log("Refusing to change status of "+curEp+" to DOWNLOADED because it's not PREDOWNLOADED/SNATCHED_PROPER", logger.ERROR)
+                    if int(status) == DOWNLOADED and epObj.status not in (PREDOWNLOADED, SNATCHED_PROPER, SNATCHED_BACKLOG):
+                        logger.log("Refusing to change status of "+curEp+" to DOWNLOADED because it's not PREDOWNLOADED/SNATCHED_PROPER/SNATCHED_BACKLOG", logger.ERROR)
                         continue
 
                     epObj.status = int(status)

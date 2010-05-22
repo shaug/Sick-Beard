@@ -127,8 +127,8 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 
 	# if we got some results then use them no matter what.
 	# OR
-	# return anyway unless we're doing a backlog or manual search
-	if nzbResults or not (episode.status == BACKLOG or manualSearch):
+	# return anyway unless we're doing a backlog/missing or manual search
+	if nzbResults or not (episode.status in (BACKLOG, MISSED) or manualSearch):
 		return nzbResults
 
 	sceneSearchStrings = set(helpers.makeSceneSearchString(episode))
@@ -147,6 +147,10 @@ def findEpisode (episode, forceQuality=None, manualSearch=False):
 		
 		title = item.findtext('title')
 		url = item.findtext('link')
+		
+		if epQuality == HD and ("720p" not in title or "itouch" in title.lower()):
+			logger.log("Ignoring result "+title+" because it doesn't contain 720p in the name or is an iTouch release", logger.DEBUG)
+			continue
 		
 		logger.log("Found result " + title + " at " + url, logger.DEBUG)
 		
@@ -261,7 +265,7 @@ class NZBsCache(tvcache.TVCache):
 			responseSoup = etree.ElementTree(etree.XML(data))
 			items = responseSoup.getiterator('item')
 		except Exception, e:
-			logger.log("Error trying to load TVBinz RSS feed: "+str(e), logger.ERROR)
+			logger.log("Error trying to load NZBs.org RSS feed: "+str(e), logger.ERROR)
 			return []
 			
 		for item in items:

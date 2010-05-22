@@ -28,7 +28,7 @@ import os
 from threading import Lock
 
 # apparently py2exe won't build these unless they're imported somewhere 
-from providers import eztv, nzbs, nzbmatrix, newzbin, tvnzb, tvbinz
+from providers import eztv, nzbs, nzbmatrix, tvbinz, nzbsrus, binreq
 
 from sickbeard import searchCurrent, searchBacklog, showUpdater, versionChecker, properFinder, autoPostProcesser
 from sickbeard import helpers, db, exceptions, queue, scheduler
@@ -102,7 +102,7 @@ USENET_RETENTION = None
 SEARCH_FREQUENCY = None
 BACKLOG_SEARCH_FREQUENCY = None
 
-MIN_SEARCH_FREQUENCY = 30
+MIN_SEARCH_FREQUENCY = 10
 MIN_BACKLOG_SEARCH_FREQUENCY = 7
 
 DEFAULT_SEARCH_FREQUENCY = 60
@@ -117,10 +117,6 @@ KEEP_PROCESSED_DIR = False
 KEEP_PROCESSED_FILE = False
 TV_DOWNLOAD_DIR = None
 
-NEWZBIN = False
-NEWZBIN_USERNAME = None
-NEWZBIN_PASSWORD = None
-
 SHOW_TVBINZ = False
 TVBINZ = False
 TVBINZ_UID = None
@@ -132,11 +128,13 @@ NZBS = False
 NZBS_UID = None
 NZBS_HASH = None
 
+NZBSRUS = False
+NZBSRUS_UID = None
+NZBSRUS_HASH = None
+
 NZBMATRIX = False
 NZBMATRIX_USERNAME = None
 NZBMATRIX_APIKEY = None
-
-TVNZB = False
 
 SAB_USERNAME = None
 SAB_PASSWORD = None
@@ -240,7 +238,7 @@ def initialize(consoleLogging=True):
     with INIT_LOCK:
         
         global LOG_DIR, WEB_PORT, WEB_LOG, WEB_ROOT, WEB_USERNAME, WEB_PASSWORD, NZB_METHOD, NZB_DIR, \
-                NEWZBIN, NEWZBIN_USERNAME, NEWZBIN_PASSWORD, TVBINZ, TVBINZ_UID, TVBINZ_HASH, \
+                TVBINZ, TVBINZ_UID, TVBINZ_HASH, \
                 SAB_USERNAME, SAB_PASSWORD, SAB_APIKEY, SAB_CATEGORY, SAB_HOST, \
                 XBMC_NOTIFY_ONSNATCH, XBMC_NOTIFY_ONDOWNLOAD, \
                 XBMC_UPDATE_LIBRARY, XBMC_HOST, XBMC_USERNAME, XBMC_PASSWORD, currentSearchScheduler, backlogSearchScheduler, \
@@ -251,11 +249,12 @@ def initialize(consoleLogging=True):
                 DEFAULT_BACKLOG_SEARCH_FREQUENCY, QUALITY_DEFAULT, SEASON_FOLDERS_DEFAULT, \
                 USE_GROWL, GROWL_HOST, GROWL_PASSWORD, PROG_DIR, NZBMATRIX, NZBMATRIX_USERNAME, \
                 NZBMATRIX_APIKEY, versionCheckScheduler, VERSION_NOTIFY, PROCESS_AUTOMATICALLY, \
-                KEEP_PROCESSED_DIR, TV_DOWNLOAD_DIR, TVNZB, TVDB_BASE_URL, MIN_SEARCH_FREQUENCY, \
+                KEEP_PROCESSED_DIR, TV_DOWNLOAD_DIR, TVDB_BASE_URL, MIN_SEARCH_FREQUENCY, \
                 MIN_BACKLOG_SEARCH_FREQUENCY, TVBINZ_AUTH, TVBINZ_SABUID, showQueueScheduler, \
                 NAMING_SHOW_NAME, NAMING_EP_TYPE, NAMING_MULTI_EP_TYPE, CACHE_DIR, TVDB_API_PARMS, \
                 RENAME_EPISODES, properFinderScheduler, PROVIDER_ORDER, autoPostProcesserScheduler, \
-                KEEP_PROCESSED_FILE, CREATE_IMAGES, NAMING_EP_NAME, NAMING_SEP_TYPE, NAMING_USE_PERIODS
+                KEEP_PROCESSED_FILE, CREATE_IMAGES, NAMING_EP_NAME, NAMING_SEP_TYPE, NAMING_USE_PERIODS, \
+                NZBSRUS, NZBSRUS_UID, NZBSRUS_HASH, BINREQ
 
         
         if __INITIALIZED__:
@@ -344,10 +343,6 @@ def initialize(consoleLogging=True):
         KEEP_PROCESSED_DIR = check_setting_int(CFG, 'General', 'keep_processed_dir', 1)
         KEEP_PROCESSED_FILE = check_setting_int(CFG, 'General', 'keep_processed_file', 0)
         
-        NEWZBIN = bool(check_setting_int(CFG, 'Newzbin', 'newzbin', 0))
-        NEWZBIN_USERNAME = check_setting_str(CFG, 'Newzbin', 'newzbin_username', '')
-        NEWZBIN_PASSWORD = check_setting_str(CFG, 'Newzbin', 'newzbin_password', '')
-        
         TVBINZ = bool(check_setting_int(CFG, 'TVBinz', 'tvbinz', 0))
         TVBINZ_UID = check_setting_str(CFG, 'TVBinz', 'tvbinz_uid', '')
         TVBINZ_SABUID = check_setting_str(CFG, 'TVBinz', 'tvbinz_sabuid', '')
@@ -358,11 +353,15 @@ def initialize(consoleLogging=True):
         NZBS_UID = check_setting_str(CFG, 'NZBs', 'nzbs_uid', '')
         NZBS_HASH = check_setting_str(CFG, 'NZBs', 'nzbs_hash', '')
         
+        NZBSRUS = bool(check_setting_int(CFG, 'NZBsRUS', 'nzbsrus', 0))
+        NZBSRUS_UID = check_setting_str(CFG, 'NZBsRUS', 'nzbsrus_uid', '')
+        NZBSRUS_HASH = check_setting_str(CFG, 'NZBsRUS', 'nzbsrus_hash', '')
+        
         NZBMATRIX = bool(check_setting_int(CFG, 'NZBMatrix', 'nzbmatrix', 0))
         NZBMATRIX_USERNAME = check_setting_str(CFG, 'NZBMatrix', 'nzbmatrix_username', '')
         NZBMATRIX_APIKEY = check_setting_str(CFG, 'NZBMatrix', 'nzbmatrix_apikey', '')
         
-        TVNZB = bool(check_setting_int(CFG, 'TVNZB', 'tvnzb', 0))
+        BINREQ = bool(check_setting_int(CFG, 'Bin-Req', 'binreq', 1))
 
         SAB_USERNAME = check_setting_str(CFG, 'SABnzbd', 'sab_username', '')
         SAB_PASSWORD = check_setting_str(CFG, 'SABnzbd', 'sab_password', '')
@@ -596,7 +595,7 @@ def save_config():
     CFG['General']['season_folders_default'] = int(SEASON_FOLDERS_DEFAULT)
     CFG['General']['provider_order'] = ' '.join(PROVIDER_ORDER)
     CFG['General']['version_notify'] = int(VERSION_NOTIFY)
-    CFG['General']['naming_ep_name'] = int(NAMING_SHOW_NAME)
+    CFG['General']['naming_ep_name'] = int(NAMING_EP_NAME)
     CFG['General']['naming_show_name'] = int(NAMING_SHOW_NAME)
     CFG['General']['naming_ep_type'] = int(NAMING_EP_TYPE)
     CFG['General']['naming_multi_ep_type'] = int(NAMING_MULTI_EP_TYPE)
@@ -614,9 +613,6 @@ def save_config():
     CFG['General']['rename_episodes'] = int(RENAME_EPISODES)
     CFG['Blackhole']['nzb_dir'] = NZB_DIR
     CFG['Blackhole']['torrent_dir'] = TORRENT_DIR
-    CFG['Newzbin']['newzbin'] = int(NEWZBIN)
-    CFG['Newzbin']['newzbin_username'] = NEWZBIN_USERNAME
-    CFG['Newzbin']['newzbin_password'] = NEWZBIN_PASSWORD
     CFG['TVBinz']['tvbinz'] = int(TVBINZ)
     CFG['TVBinz']['tvbinz_uid'] = TVBINZ_UID
     CFG['TVBinz']['tvbinz_sabuid'] = TVBINZ_SABUID
@@ -625,10 +621,13 @@ def save_config():
     CFG['NZBs']['nzbs'] = int(NZBS)
     CFG['NZBs']['nzbs_uid'] = NZBS_UID
     CFG['NZBs']['nzbs_hash'] = NZBS_HASH
+    CFG['NZBsRUS']['nzbsrus'] = int(NZBSRUS)
+    CFG['NZBsRUS']['nzbsrus_uid'] = NZBSRUS_UID
+    CFG['NZBsRUS']['nzbsrus_hash'] = NZBSRUS_HASH
     CFG['NZBMatrix']['nzbmatrix'] = int(NZBMATRIX)
     CFG['NZBMatrix']['nzbmatrix_username'] = NZBMATRIX_USERNAME
     CFG['NZBMatrix']['nzbmatrix_apikey'] = NZBMATRIX_APIKEY
-    CFG['TVNZB']['tvnzb'] = int(TVNZB)
+    CFG['Bin-Req']['binreq'] = int(BINREQ)
     CFG['SABnzbd']['sab_username'] = SAB_USERNAME
     CFG['SABnzbd']['sab_password'] = SAB_PASSWORD
     CFG['SABnzbd']['sab_apikey'] = SAB_APIKEY
