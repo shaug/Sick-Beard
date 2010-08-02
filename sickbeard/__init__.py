@@ -57,7 +57,6 @@ autoPostProcesserScheduler = None
 showList = None
 loadingShowList = None
 
-missingList = None
 airingList = None
 comingList = None
 
@@ -89,6 +88,8 @@ NAMING_EP_TYPE = None
 NAMING_MULTI_EP_TYPE = None
 NAMING_SEP_TYPE = None
 NAMING_USE_PERIODS = None
+NAMING_QUALITY = None
+NAMING_DATES = None
 
 TVDB_API_KEY = '9DAF49C96CBF8DAC'
 TVDB_BASE_URL = None
@@ -145,6 +146,7 @@ SAB_HOST = None
 XBMC_NOTIFY_ONSNATCH = False
 XBMC_NOTIFY_ONDOWNLOAD = False
 XBMC_UPDATE_LIBRARY = False
+XBMC_UPDATE_FULL = False
 XBMC_HOST = None
 XBMC_USERNAME = None
 XBMC_PASSWORD = None
@@ -240,9 +242,9 @@ def initialize(consoleLogging=True):
         global LOG_DIR, WEB_PORT, WEB_LOG, WEB_ROOT, WEB_USERNAME, WEB_PASSWORD, NZB_METHOD, NZB_DIR, \
                 TVBINZ, TVBINZ_UID, TVBINZ_HASH, \
                 SAB_USERNAME, SAB_PASSWORD, SAB_APIKEY, SAB_CATEGORY, SAB_HOST, \
-                XBMC_NOTIFY_ONSNATCH, XBMC_NOTIFY_ONDOWNLOAD, \
+                XBMC_NOTIFY_ONSNATCH, XBMC_NOTIFY_ONDOWNLOAD, XBMC_UPDATE_FULL, \
                 XBMC_UPDATE_LIBRARY, XBMC_HOST, XBMC_USERNAME, XBMC_PASSWORD, currentSearchScheduler, backlogSearchScheduler, \
-                showUpdateScheduler, __INITIALIZED__, LAUNCH_BROWSER, showList, missingList, \
+                showUpdateScheduler, __INITIALIZED__, LAUNCH_BROWSER, showList, \
                 airingList, comingList, loadingShowList, CREATE_METADATA, SOCKET_TIMEOUT, \
                 NZBS, NZBS_UID, NZBS_HASH, USE_NZB, USE_TORRENT, TORRENT_DIR, USENET_RETENTION, \
                 SEARCH_FREQUENCY, DEFAULT_SEARCH_FREQUENCY, BACKLOG_SEARCH_FREQUENCY, \
@@ -254,7 +256,7 @@ def initialize(consoleLogging=True):
                 NAMING_SHOW_NAME, NAMING_EP_TYPE, NAMING_MULTI_EP_TYPE, CACHE_DIR, TVDB_API_PARMS, \
                 RENAME_EPISODES, properFinderScheduler, PROVIDER_ORDER, autoPostProcesserScheduler, \
                 KEEP_PROCESSED_FILE, CREATE_IMAGES, NAMING_EP_NAME, NAMING_SEP_TYPE, NAMING_USE_PERIODS, \
-                NZBSRUS, NZBSRUS_UID, NZBSRUS_HASH, BINREQ
+                NZBSRUS, NZBSRUS_UID, NZBSRUS_HASH, BINREQ, NAMING_QUALITY, NAMING_DATES
 
         
         if __INITIALIZED__:
@@ -315,6 +317,8 @@ def initialize(consoleLogging=True):
         NAMING_MULTI_EP_TYPE = check_setting_int(CFG, 'General', 'naming_multi_ep_type', 0)
         NAMING_SEP_TYPE = check_setting_int(CFG, 'General', 'naming_sep_type', 0)
         NAMING_USE_PERIODS = bool(check_setting_int(CFG, 'General', 'naming_use_periods', 0))
+        NAMING_QUALITY = bool(check_setting_int(CFG, 'General', 'naming_quality', 0))
+        NAMING_DATES = bool(check_setting_int(CFG, 'General', 'naming_dates', 1))
 
         TVDB_BASE_URL = 'http://www.thetvdb.com/api/' + TVDB_API_KEY
 
@@ -324,7 +328,7 @@ def initialize(consoleLogging=True):
         
         USE_NZB = bool(check_setting_int(CFG, 'General', 'use_nzb', 1))
         USE_TORRENT = bool(check_setting_int(CFG, 'General', 'use_torrent', 0))
-        USENET_RETENTION = check_setting_int(CFG, 'General', 'usenet_retention', 200)
+        USENET_RETENTION = check_setting_int(CFG, 'General', 'usenet_retention', 500)
         
         SEARCH_FREQUENCY = check_setting_int(CFG, 'General', 'search_frequency', DEFAULT_SEARCH_FREQUENCY)
         if SEARCH_FREQUENCY < MIN_SEARCH_FREQUENCY:
@@ -372,6 +376,7 @@ def initialize(consoleLogging=True):
         XBMC_NOTIFY_ONSNATCH = bool(check_setting_int(CFG, 'XBMC', 'xbmc_notify_onsnatch', 0))
         XBMC_NOTIFY_ONDOWNLOAD = bool(check_setting_int(CFG, 'XBMC', 'xbmc_notify_ondownload', 0))
         XBMC_UPDATE_LIBRARY = bool(check_setting_int(CFG, 'XBMC', 'xbmc_update_library', 0))
+        XBMC_UPDATE_FULL = bool(check_setting_int(CFG, 'XBMC', 'xbmc_update_full', 0))
         XBMC_HOST = check_setting_str(CFG, 'XBMC', 'xbmc_host', '')
         XBMC_USERNAME = check_setting_str(CFG, 'XBMC', 'xbmc_username', '')
         XBMC_PASSWORD = check_setting_str(CFG, 'XBMC', 'xbmc_password', '')
@@ -429,7 +434,6 @@ def initialize(consoleLogging=True):
         showList = []
         loadingShowList = {}
         
-        missingList = []
         airingList = []
         comingList = []
 
@@ -569,7 +573,7 @@ def save_config():
     global LOG_DIR, WEB_PORT, WEB_LOG, WEB_USERNAME, WEB_PASSWORD, NZB_METHOD, NZB_DIR, \
         NEWZBIN, NEWZBIN_USERNAME, NEWZBIN_PASSWORD, TVBINZ, TVBINZ_UID, TVBINZ_HASH, \
         SAB_USERNAME, SAB_PASSWORD, SAB_APIKEY, SAB_CATEGORY, SAB_HOST, \
-        XBMC_NOTIFY_ONSNATCH, XBMC_NOTIFY_ONDOWNLOAD, \
+        XBMC_NOTIFY_ONSNATCH, XBMC_NOTIFY_ONDOWNLOAD, XBMC_UPDATE_FULL, \
         XBMC_UPDATE_LIBRARY, XBMC_HOST, XBMC_PASSWORD, XBMC_USERNAME, CFG, LAUNCH_BROWSER, CREATE_METADATA, USE_NZB, \
         USE_TORRENT, TORRENT_DIR, USENET_RETENTION, SEARCH_FREQUENCY, BACKLOG_SEARCH_FREQUENCY, \
         QUALITY_DEFAULT, SEASON_FOLDERS_DEFAULT, USE_GROWL, GROWL_HOST, GROWL_PASSWORD, \
@@ -601,6 +605,8 @@ def save_config():
     CFG['General']['naming_multi_ep_type'] = int(NAMING_MULTI_EP_TYPE)
     CFG['General']['naming_sep_type'] = int(NAMING_SEP_TYPE)
     CFG['General']['naming_use_periods'] = int(NAMING_USE_PERIODS)
+    CFG['General']['naming_quality'] = int(NAMING_QUALITY)
+    CFG['General']['naming_dates'] = int(NAMING_DATES)
     CFG['General']['use_torrent'] = int(USE_TORRENT)
     CFG['General']['launch_browser'] = int(LAUNCH_BROWSER)
     CFG['General']['create_metadata'] = int(CREATE_METADATA)
@@ -636,6 +642,7 @@ def save_config():
     CFG['XBMC']['xbmc_notify_onsnatch'] = int(XBMC_NOTIFY_ONSNATCH)
     CFG['XBMC']['xbmc_notify_ondownload'] = int(XBMC_NOTIFY_ONDOWNLOAD)
     CFG['XBMC']['xbmc_update_library'] = int(XBMC_UPDATE_LIBRARY)
+    CFG['XBMC']['xbmc_update_full'] = int(XBMC_UPDATE_FULL)
     CFG['XBMC']['xbmc_host'] = XBMC_HOST
     CFG['XBMC']['xbmc_username'] = XBMC_USERNAME
     CFG['XBMC']['xbmc_password'] = XBMC_PASSWORD
@@ -667,40 +674,6 @@ def launchBrowser():
             logger.log("Unable to launch a browser", logger.ERROR)
 
 
-def updateMissingList():
-    
-    logger.log("Searching DB and building list of MISSED episodes")
-    
-    myDB = db.DBConnection()
-    sqlResults = myDB.select("SELECT * FROM tv_episodes WHERE status=" + str(MISSED))
-    
-    epList = []
-
-    for sqlEp in sqlResults:
-        
-        try:
-            show = helpers.findCertainShow (sickbeard.showList, int(sqlEp["showid"]))
-        except exceptions.MultipleShowObjectsException:
-            logger.log("ERROR: expected to find a single show matching " + sqlEp["showid"]) 
-            return None
-        
-        # we aren't ever downloading specials
-        if int(sqlEp["season"]) == 0:
-            continue
-        
-        if show == None:
-            continue
-        
-        ep = show.getEpisode(sqlEp["season"], sqlEp["episode"])
-        
-        if ep == None:
-            logger.log("Somehow "+show.name+" - "+str(sqlEp["season"])+"x"+str(sqlEp["episode"])+" is None", logger.ERROR)
-        else:
-            epList.append(ep)
-
-    sickbeard.missingList = epList
-
-
 def updateAiringList():
     
     logger.log("Searching DB and building list of airing episodes")
@@ -708,7 +681,7 @@ def updateAiringList():
     curDate = datetime.date.today().toordinal()
 
     myDB = db.DBConnection()
-    sqlResults = myDB.select("SELECT * FROM tv_episodes WHERE status IN (" + str(UNAIRED) + ", " + str(PREDOWNLOADED) + ") AND airdate <= " + str(curDate))
+    sqlResults = myDB.select("SELECT * FROM tv_episodes WHERE status == " + str(UNAIRED) + " AND airdate <= " + str(curDate))
     
     epList = []
 

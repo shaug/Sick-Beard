@@ -22,16 +22,14 @@ import os
 import shutil
 import sys
 import re
+import glob
 from shutil import Error
 
 from sickbeard import notifiers
 from sickbeard import exceptions
-from sickbeard import helpers
 from sickbeard import notifiers
-from sickbeard import sqlite3
-from sickbeard import db
+from sickbeard import db, classes, helpers, sceneHelpers
 from sickbeard import history
-from sickbeard import classes
 
 from sickbeard import encodingKludge as ek
 
@@ -54,7 +52,7 @@ def renameFile(curFile, newName):
     oldFile = os.path.splitext(filePath[1])
 
     newFilename = ek.ek(os.path.join, filePath[0], helpers.sanitizeFileName(newName) + oldFile[1])
-    
+
     logger.log("Renaming from " + curFile + " to " + newFilename)
 
     try:
@@ -79,35 +77,16 @@ def moveFile(srcFile, destFile):
         copyFile(srcFile, destFile)
         os.unlink(srcFile)
 
+def deleteAssociatedFiles(file):
+    
+    if not ek.ek(os.path.isfile, file):
+        return
 
-# #########################
-# Find the file we're dealing with
-# #########################
-def findMainFile (show_dir):
-    # init vars
-    biggest_file = None
-    biggest_file_size = 0
-    next_biggest_file_size = 0
+    baseName = file.rpartition('.')[0]
 
-    # find the biggest file in the folder
-    for file in filter(helpers.isMediaFile, ek.ek(os.listdir, show_dir)):
-        cur_size = os.path.getsize(os.path.join(show_dir, file))
-        if cur_size > biggest_file_size:
-            biggest_file = file
-            next_biggest_file_size = biggest_file_size
-            biggest_file_size = cur_size
-
-    if biggest_file == None:
-        return biggest_file
-
-    # it should be by far the biggest file in the folder. If it isn't, we have a problem (multi-show nzb or something, not going to deal with it)
-    if float(next_biggest_file_size) / float(biggest_file_size) > sample_ratio:
-        logger.log("Multiple files in the folder are comparably large, giving up", logger.ERROR)
-        return None
-
-    return os.path.join(show_dir, biggest_file)
-
-
+    for curFile in ek.ek(glob.glob, baseName+'.*'):
+        os.remove(curFile)
+        
 def _checkForExistingFile(newFile, oldFile):
 
     # if the new file exists, return the appropriate code depending on the size
@@ -126,19 +105,20 @@ def _checkForExistingFile(newFile, oldFile):
 
 def findInHistory(nzbName):
 
-    nzbName = nzbName.rpartition(".")[0]
+    names = [nzbName, nzbName.rpartition(".")[0]]
     
     if not nzbName:
         return None
     
     myDB = db.DBConnection()
-    sqlResults = myDB.select("SELECT * FROM history WHERE resource = ?", [nzbName])
     
-    if len(sqlResults) == 1:
-        return (int(sqlResults[0]["showid"]), int(sqlResults[0]["season"]), int(sqlResults[0]["episode"]))
+    for curName in names:
+        sqlResults = myDB.select("SELECT * FROM history WHERE resource LIKE ?", [re.sub("[\.\-\ ]", "_", curName)])
+        
+        if len(sqlResults) == 1:
+            return (int(sqlResults[0]["showid"]), int(sqlResults[0]["season"]), int(sqlResults[0]["episode"]))
 
-    else:
-        return None
+    return None
             
 
 def logHelper (logMessage, logLevel=logger.MESSAGE):
@@ -171,7 +151,10 @@ def processDir (dirName, nzbName=None, recurse=False):
     if dirName.startswith('_FAILED_'):
         returnStr += logHelper("The directory name indicates it failed to extract, cancelling", logger.DEBUG)
         return returnStr
-    
+    elif dirName.startswith('_UNDERSIZED_'):
+        returnStr += logHelper("The directory name indicates that it was previously rejected for being undersized, cancelling", logger.DEBUG)
+        return returnStr
+
     # make sure the dir isn't inside a show dir
     myDB = db.DBConnection()
     sqlResults = myDB.select("SELECT * FROM tv_shows")
@@ -251,7 +234,7 @@ def processFile(fileName, downloadDir=None, nzbName=None):
 
     for curName in (fileName, folderName, nzbName):
         if curName != None:
-            for curSceneName in helpers.sceneToNormalShowNames(curName):
+            for curSceneName in sceneHelpers.sceneToNormalShowNames(curName):
                 if curSceneName not in finalNameList:
                     finalNameList.append(curSceneName)
 
@@ -289,8 +272,10 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             returnStr += logHelper("Attempting to parse name "+curName, logger.DEBUG)
             myParser = FileParser(curName)
             result = myParser.parse()
+
             season = result.seasonnumber
             episodes = result.episodenumbers
+            
         except tvnamer_exceptions.InvalidFilename:
             returnStr += logHelper("Unable to parse the filename "+curName+" into a valid episode", logger.DEBUG)
             continue
@@ -299,19 +284,47 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             returnStr += logHelper("Filename "+curName+" has no series name, unable to use this name for processing", logger.DEBUG)
             continue
 
+        if not episodes:
+            returnStr += logHelper("Unable to find an episode number in the filename "+curName+", skipping", logger.DEBUG)
+            continue
+
+        # reverse-lookup the scene exceptions
+        sceneID = None
+        for exceptionID in sceneExceptions:
+            if curName == sceneExceptions[exceptionID]:
+                sceneID = exceptionID
+                break
+
         try:
             returnStr += logHelper("Looking up name "+result.seriesname+" on TVDB", logger.DEBUG)
             t = tvdb_api.Tvdb(custom_ui=classes.ShowListUI, **sickbeard.TVDB_API_PARMS)
-            showObj = t[result.seriesname]
+
+            # get the tvdb object from either the scene exception ID or the series name
+            if sceneID:
+                showObj = t[sceneID]
+            else:
+                showObj = t[result.seriesname]
+            
             showInfo = (int(showObj["id"]), showObj["seriesname"])
         except (tvdb_exceptions.tvdb_exception, IOError), e:
 
-            returnStr += logHelper("TVDB didn't respond, trying to look up the show in the DB instead: "+str(e), logger.DEBUG)
+            returnStr += logHelper("Unable to look up show on TVDB: "+str(e), logger.DEBUG)
+            returnStr += logHelper("Looking up show in DB instead", logger.DEBUG)
             showInfo = helpers.searchDBForShow(result.seriesname)
 
         if showInfo:
             tvdb_id = showInfo[0]
-            
+
+        # if it is an air-by-date show and we successfully found it on TVDB, convert the date into a season/episode
+        if season == -1 and showObj:
+            try:
+                epObj = showObj.airedOn(episodes[0])[0]
+                season = int(epObj["seasonnumber"])
+                episodes = [int(epObj["episodenumber"])]
+            except tvdb_exceptions.tvdb_episodenotfound, e:
+                returnStr += logHelper("Unable to find episode with date "+str(episodes[0])+" for show "+showObj["seriesname"]+", skipping", logger.DEBUG)
+                continue
+
         # if we couldn't get the necessary info from either of the above methods, try the next name
         if tvdb_id == None or season == None or episodes == []:
             continue
@@ -321,15 +334,17 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             showResults = helpers.findCertainShow(sickbeard.showList, showInfo[0])
         except exceptions.MultipleShowObjectsException:
             raise #TODO: later I'll just log this, for now I want to know about it ASAP
-        
+
         if showResults != None:
             returnStr += logHelper("Found the show in our list, continuing", logger.DEBUG)
             break
     
     # end for
-        
+
     # if we came out of the loop with not enough info then give up
     if tvdb_id == None or season == None or episodes == []:
+        # if we have a good enough result then fine, use it
+        
         returnStr += logHelper("Unable to figure out what this episode is, giving up", logger.DEBUG)
         return returnStr
 
@@ -343,6 +358,29 @@ def processFile(fileName, downloadDir=None, nzbName=None):
         returnStr += logHelper("The show dir doesn't exist, canceling postprocessing", logger.DEBUG)
         return returnStr
 
+    if season == -1:
+        return returnStr
+
+    # search all possible names for our new quality, in case the file or dir doesn't have it
+    newQuality = Quality.UNKNOWN
+    for curName in finalNameList:
+        curNewQuality = Quality.nameQuality(curName)
+        returnStr += logHelper("Looking up quality for name "+curName+", got "+Quality.qualityStrings[curNewQuality], logger.DEBUG)
+        # just remember if we find a good quality
+        if curNewQuality != Quality.UNKNOWN and newQuality == Quality.UNKNOWN:
+            newQuality = curNewQuality
+            returnStr += logHelper("saved quality "+Quality.qualityStrings[newQuality], logger.DEBUG)
+
+    # if we didn't get a quality from one of the names above, try assuming from each of the names
+    for curName in finalNameList:
+        if newQuality != Quality.UNKNOWN:
+            break
+        newQuality = Quality.assumeQuality(curName)
+        returnStr += logHelper("Guessing quality for name "+curName+", got "+Quality.qualityStrings[curNewQuality], logger.DEBUG)
+        if newQuality != Quality.UNKNOWN:
+            break
+
+    returnStr += logHelper("Unless we're told otherwise, assuming the quality is "+Quality.qualityStrings[newQuality], logger.DEBUG)
 
     rootEp = None
     for curEpisode in episodes:
@@ -363,6 +401,14 @@ def processFile(fileName, downloadDir=None, nzbName=None):
         else:
             rootEp.relatedEps.append(curEp)
 
+    # make sure the quality is set right before we continue
+    if rootEp.status in Quality.SNATCHED:
+        oldStatus, newQuality = Quality.splitCompositeStatus(rootEp.status)
+        returnStr += logHelper("The old status had a quality in it, using that: "+Quality.qualityStrings[newQuality], logger.DEBUG)
+    else:
+        for curEp in [rootEp] + rootEp.relatedEps:
+            curEp.status = Quality.compositeStatus(SNATCHED, newQuality)
+
     # figure out the new filename
     biggestFileName = os.path.basename(fileName)
     biggestFileExt = os.path.splitext(biggestFileName)[1]
@@ -378,7 +424,7 @@ def processFile(fileName, downloadDir=None, nzbName=None):
                 continue
             
             # if it's a season folder, check if it's the one we want
-            match = re.match("[Ss]eason\s*(\d+)", curDir)
+            match = re.match(".*[Ss]eason\s*(\d+)", curDir)
             if match != None:
                 # if it's the correct season folder then stop looking
                 if int(match.group(1)) == int(rootEp.season):
@@ -411,10 +457,23 @@ def processFile(fileName, downloadDir=None, nzbName=None):
     
     # see if the existing file is bigger - if it is, bail (unless it's a proper in which case we're forcing an overwrite)
     if existingResult > 0:
-        if rootEp.status == SNATCHED_PROPER:
+        if rootEp.status in Quality.SNATCHED_PROPER:
             returnStr += logHelper("There is already a file that's bigger at "+newFile+" but I'm going to overwrite it with a PROPER", logger.DEBUG)
         else:
             returnStr += logHelper("There is already a file that's bigger at "+newFile+" - not processing this episode.", logger.DEBUG)
+
+            # tag the dir so we know what happened
+            if downloadDir:
+                try:
+                    oldDirName = os.path.abspath(downloadDir)
+                    baseDirPath = os.path.dirname(oldDirName)
+                    endDirPath = os.path.basename(oldDirName)
+                    newDirPath = ek.ek(os.path.join, baseDirPath, '_UNDERSIZED_'+endDirPath)
+                    returnStr += logHelper("Renaming the parent folder to indicate that the post process was failed: "+downloadDir+" -> "+newDirPath, logger.DEBUG)
+                    os.rename(oldDirName, newDirPath)
+                except (OSError, IOError), e:
+                    returnStr += logHelper("Failed renaming " + oldDirName + " to " + newDirPath + ": " + str(e), logger.ERROR)
+            
             return returnStr
         
     # if the dir doesn't exist (new season folder) then make it
@@ -445,24 +504,35 @@ def processFile(fileName, downloadDir=None, nzbName=None):
             returnStr += logHelper("Unable to move the file: " + str(e), logger.ERROR)
             return returnStr
 
-    # if the file existed and was smaller then lets delete it
+    # if the file existed and was smaller/same then lets delete it
     # OR if the file existed, was bigger, but we want to replace it anyway cause it's a PROPER snatch
-    if existingResult < 0 or (existingResult > 0 and rootEp.status == SNATCHED_PROPER):
+    if existingResult <= 0 or (existingResult > 0 and rootEp.status in Quality.SNATCHED_PROPER):
+        existingFile = None
         # if we're deleting a file with a different name then just go ahead
         if existingResult in (-2, 2):
             existingFile = rootEp.location
-            if rootEp.status == SNATCHED_PROPER:
+            if rootEp.status in Quality.SNATCHED_PROPER:
                 returnStr += logHelper(existingFile + " already exists and is larger but I'm deleting it to make way for the proper", logger.DEBUG)
             else:
                 returnStr += logHelper(existingFile + " already exists but it's smaller than the new file so I'm replacing it", logger.DEBUG)
-            #TODO: delete old metadata?
-        else:
-            returnStr += logHelper(newFile + " already exists but it's smaller than the new file so I'm replacing it", logger.DEBUG)
+
+        elif ek.ek(os.path.isfile, newFile):
+            returnStr += logHelper(newFile + " already exists but it's smaller or the same size as the new file so I'm replacing it", logger.DEBUG)
             existingFile = newFile
-        
-        os.remove(existingFile)
+
+        if existingFile:
+            deleteAssociatedFiles(existingFile)
             
-    if sickbeard.RENAME_EPISODES:
+    # update the statuses before we rename so the quality goes into the name properly
+    for curEp in [rootEp] + rootEp.relatedEps:
+        with curEp.lock:
+            curEp.location = newFile
+            
+            curEp.status = Quality.compositeStatus(DOWNLOADED, newQuality)
+            
+            curEp.saveToDB()
+
+    if sickbeard.RENAME_EPISODES and ek.ek(os.path.normpath, curFile) != ek.ek(os.path.normpath, newFile):
         try:
             os.rename(curFile, newFile)
             returnStr += logHelper("Renaming the file " + curFile + " to " + newFile, logger.DEBUG)
@@ -474,15 +544,6 @@ def processFile(fileName, downloadDir=None, nzbName=None):
         returnStr += logHelper("Renaming is disabled, leaving file as "+curFile, logger.DEBUG)
         newFile = curFile
 
-    for curEp in [rootEp] + rootEp.relatedEps:
-        with curEp.lock:
-            curEp.location = newFile
-            
-            # don't mess up the status - if this is a legit download it should be SNATCHED
-            if curEp.status != PREDOWNLOADED:
-                curEp.status = DOWNLOADED
-            curEp.saveToDB()
-
     # log it to history
     history.logDownload(rootEp, fileName)
 
@@ -493,9 +554,14 @@ def processFile(fileName, downloadDir=None, nzbName=None):
     rootEp.createMetaFiles()
     rootEp.saveToDB()
 
-    # we don't want to put predownloads in the library until we can deal with removing them
-    if sickbeard.XBMC_UPDATE_LIBRARY == True and rootEp.status != PREDOWNLOADED:
-        notifiers.xbmc.updateLibrary(rootEp.show.location)
+
+    # try updating just show path first
+    if sickbeard.XBMC_UPDATE_LIBRARY:
+        for curHost in [x.strip() for x in sickbeard.XBMC_HOST.split(",")]:
+            if not notifiers.xbmc.updateLibrary(curHost, showName=rootEp.show.name) and sickbeard.XBMC_UPDATE_FULL:
+                # do a full update if requested
+                returnStr += logHelper("Update of show directory failed on " + curHost + ", trying full update as requested")
+                notifiers.xbmc.updateLibrary(curHost)
 
     returnStr += logHelper("Post processing finished successfully", logger.DEBUG)
 

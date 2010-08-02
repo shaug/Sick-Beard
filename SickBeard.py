@@ -1,3 +1,4 @@
+#!/usr/bin/python
 # Author: Nic Wolfe <nic@wolfeden.ca>
 # URL: http://code.google.com/p/sickbeard/
 #
@@ -52,12 +53,9 @@ def loadShowsFromDB():
 	myDB = db.DBConnection()
 	sqlResults = myDB.select("SELECT * FROM tv_shows")
 	
-	myShowList = []
-	
 	for sqlShow in sqlResults:
 		try:
-			curShow = TVShow(sqlShow["location"])
-			curShow.saveToDB()
+			curShow = TVShow(int(sqlShow["tvdb_id"]))
 			sickbeard.showList.append(curShow)
 		except Exception, e:
 			logger.log("There was an error creating the show in "+sqlShow["location"]+": "+str(e), logger.ERROR)
@@ -150,7 +148,6 @@ def main():
 	# set up the lists
 	sickbeard.updateAiringList()
 	sickbeard.updateComingList()
-	sickbeard.updateMissingList()
 	
 	# fire up all our threads
 	sickbeard.start()

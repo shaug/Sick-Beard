@@ -52,6 +52,11 @@ defaults = {
     'output_filename_replacements': [
     ],
 
+    # Replacements are performed on the full path used by move_files feature,
+    # including the filename
+    'move_files_fullpath_replacements': [
+    ],
+
     # Language to (try) and retrieve episode data in
     'language': 'en',
 
@@ -107,6 +112,7 @@ defaults = {
         [Ss](?P=seasonnumber)                    # last s01
         [\.\- ]?                                 # separator
         [Ee](?P<episodenumberend>[0-9]+))        # final episode number
+        ([\.\-\ ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
         [^\/]*$''',
 
         # foo.s01e23e24*
@@ -118,6 +124,7 @@ defaults = {
         ([\.\- ]?                                # separator
         [Ee][0-9]+)*                             # e24e25 etc
         [\.\- ]?[Ee](?P<episodenumberend>[0-9]+) # final episode num
+        ([\.\- ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
         [^\/]*$''',
 
         # foo.1x23 1x24 1x25
@@ -131,6 +138,7 @@ defaults = {
         ([ \._\-]+                               # separator
         (?P=seasonnumber)                        # last season number (1)
         [xX](?P<episodenumberend>[0-9]+))        # last episode number (x25)
+        ([\.\- ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
         [^\/]*$''',
 
         # foo.1x23x24*
@@ -140,6 +148,7 @@ defaults = {
         [xX](?P<episodenumberstart>[0-9]+)       # first x23
         ([xX][0-9]+)*                            # x24x25 etc
         [xX](?P<episodenumberend>[0-9]+)         # final episode num
+        ([\.\- ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
         [^\/]*$''',
 
         # foo.s01e23-24*
@@ -153,7 +162,8 @@ defaults = {
              [Ee]?[0-9]+
         )*
              [\-]                                # separator
-             (?P<episodenumberend>[0-9]+)        # final episode num
+             [Ee]?(?P<episodenumberend>[0-9]+)   # final episode num
+        [\.\- ]                                  # must have a separator (prevents s01e01-720p from being 720 episodes)
         [^\/]*$''',
 
         # foo.1x23-24*
@@ -166,7 +176,9 @@ defaults = {
         )*
              [\-]                                # separator
              (?P<episodenumberend>[0-9]+)        # final episode num
-        [^\/]*$''',
+        ([\.\- ].*                               # must have a separator (prevents 1x01-720p from being 720 episodes)
+        |
+        $)''',
 
         # foo.[1x09-11]*
         '''^(?P<seriesname>.+?)[ \._\-]          # show name and padding
@@ -178,6 +190,7 @@ defaults = {
         -                                        # -
             (?P<episodenumberend>[0-9]+)         # episode
         \]                                       # \]
+        ([\.\- ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
         [^\\/]*$''',
 
         # foo.s0101, foo.0201
@@ -185,7 +198,7 @@ defaults = {
         [Ss](?P<seasonnumber>[0-9]{2})
         [\.\- ]?
         (?P<episodenumber>[0-9]{2})
-        [^\\/]*$''',
+        [^0-9]*$''',
 
         # foo.1x09*
         '''^((?P<seriesname>.+?)[ \._\-])?       # show name and padding
@@ -194,19 +207,38 @@ defaults = {
         [xX]                                     # x
         (?P<episodenumber>[0-9]+)                # episode
         \]?                                      # ] optional
+        ([\.\- ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
         [^\\/]*$''',
 
         # foo.s01.e01, foo.s01_e01
         '''^((?P<seriesname>.+?)[ \._\-])?
         [Ss](?P<seasonnumber>[0-9]+)[\.\- ]?
-        [Ee]?(?P<episodenumber>[0-9]+)
-        [^\\/]*$''',
+        [Ee](?P<episodenumber>[0-9]+)[\.\- ]+
+        ((?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
+        [^\\/]*?$''',
+
+        # foo.2010.01.02.etc
+        '''
+        ^((?P<seriesname>.+?)[ \._\-])?         # show name
+        (?P<year>\d{4})                          # year
+        [ \._\-]                                 # separator
+        (?P<month>\d{2})                         # month
+        [ \._\-]                                 # separator
+        (?P<day>\d{2})                           # day
+        ([\.\- ]+(?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
+        [^\/]*$''',
 
         # Foo - S2 E 02 - etc
         '''^(?P<seriesname>.+?)[ ]?[ \._\-][ ]?
         [Ss](?P<seasonnumber>[0-9]+)[\.\- ]?
-        [Ee]?[ ]?(?P<episodenumber>[0-9]+)
+        [Ee][ ]?(?P<episodenumber>[0-9]+)
         [^\\/]*$''',
+
+        # scene.name.s02.etc (whole season, episode = empty list)
+        '''^((?P<seriesname>.+?)[ \._])?
+        [Ss](?P<seasonnumberonly>[0-9]+)[\.\_ ]+?
+        ((?P<episodename>.+?)(\.(?P<ext>\w{3,4}))?$)?           # get the episode name & extension if it is available
+        [^\/]*$''',
 
         # Show - Episode 9999 [S 12 - Ep 131] - etc
         '''
@@ -220,6 +252,16 @@ defaults = {
         ([eE]|[eE]p)[ ]?(?P<episodenumber>\d+)   # e or ep 12
         \]                                       # ]
         .*$                                      # rest of file
+        ''',
+
+        # show.name.e123.abc
+        '''^(?P<seriesname>.+?)                  # Show name
+        [ \._\-]                                 # Padding
+        (?P<episodenumber>[0-9]+)                # 2
+        of                                       # of
+        [ \._\-]?                                # Padding
+        \d+                                      # 6
+        ([\._ -]|$|[^\\/]*$)                     # More padding, then anything
         ''',
 
         # foo.103*
@@ -239,15 +281,28 @@ defaults = {
         [ \._\-]                                 # Padding
         [Ee](?P<episodenumber>[0-9]+)            # E123
         [\._ -][^\\/]*$                          # More padding, then anything
+        ''',
+
+        # match stupid scene names like tpz-abc123.avi
         '''
+        ^(?:[A-Za-z]{3,})\-(?P<seriesname>\w+?)  # get series name (even though it's probably a meaningless acronym)
+        (?P<seasonnumber>\d{1,2})                # season number is either the first one or two digits
+        (?P<episodenumber>\d\d)                  # ep number is always the last 2 digits
+        \.\w+$                                   # dirnames should never be this stupid so require an extension
+        ''',
+
     ],
 
     # Formats for renamed files. Variations for with/without episode,
     # and with/without season number.
     'filename_with_episode':
      '%(seriesname)s - [%(seasonno)02dx%(episode)s] - %(episodename)s%(ext)s',
+    'filename_season_only_with_episode':
+     '%(seriesname)s - [S%(seasonno)02d] - %(episodename)s%(ext)s',
     'filename_without_episode':
      '%(seriesname)s - [%(seasonno)02dx%(episode)s]%(ext)s',
+    'filename_season_only_without_episode':
+     '%(seriesname)s - [S%(seasonno)02d]%(ext)s',
      'filename_with_episode_no_season':
       '%(seriesname)s - [%(episode)s] - %(episodename)s%(ext)s',
      'filename_without_episode_no_season':

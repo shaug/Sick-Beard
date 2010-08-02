@@ -18,12 +18,16 @@
 
 
 
-import urllib
+import urllib, httplib
+import datetime
 
 import sickbeard
 
+from lib import MultipartPostHandler
+import urllib2, cookielib
+
 from sickbeard.common import *
-from sickbeard import logger
+from sickbeard import logger, classes
 
 def sendNZB(nzb):
     
@@ -38,14 +42,20 @@ def sendNZB(nzb):
     if sickbeard.SAB_CATEGORY != None:
         params['cat'] = sickbeard.SAB_CATEGORY
 
-    # don't bother making backlog episodes high priority
-    if nzb.episode.status != BACKLOG:
-        params['priority'] = 1
+    # if it aired recently make it high priority
+    for curEp in nzb.episodes:
+        if datetime.date.today() - curEp.airdate <= datetime.timedelta(days=7):
+            params['priority'] = 1
 
-    params['pp'] = 3
+    # if it's a normal result we just pass SAB the URL
+    if nzb.resultType == "nzb":
+        params['mode'] = 'addurl'
+        params['name'] = nzb.url
     
-    params['mode'] = 'addurl'
-    params['name'] = nzb.url
+    # if we get a raw data result we want to upload it to SAB
+    elif nzb.resultType == "nzbdata":
+        params['mode'] = 'addfile'
+        multiPartParams = {"nzbfile": (nzb.name+".nzb", nzb.extraInfo[0])}
 
     url = 'http://' + sickbeard.SAB_HOST + "/sabnzbd/api?" + urllib.urlencode(params)
 
@@ -54,11 +64,28 @@ def sendNZB(nzb):
     logger.log("URL: " + url, logger.DEBUG)
 
     try:
-        f = urllib.urlopen(url)
+        
+        if nzb.resultType == "nzb":
+            f = urllib.urlopen(url)
+        elif nzb.resultType == "nzbdata":
+            cookies = cookielib.CookieJar()
+            opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookies),
+                                          MultipartPostHandler.MultipartPostHandler)
+
+            req = urllib2.Request(url,
+                                  multiPartParams,
+                                  headers={'User-Agent': classes.SickBeardURLopener().version})
+
+            f = opener.open(req)
+            
     except IOError, e:
         logger.log("Unable to connect to SAB: "+str(e), logger.ERROR)
         return False
-    
+
+    except httplib.InvalidURL, e:
+        logger.log("Invalid SAB host, check your config: "+str(e), logger.ERROR)
+        return False
+        
     if f == None:
         logger.log("No data returned from SABnzbd, NZB not sent", logger.ERROR)
         return False

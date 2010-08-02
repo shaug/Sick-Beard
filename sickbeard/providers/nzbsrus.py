@@ -19,7 +19,6 @@
 
 
 import urllib
-import urllib2
 import os.path
 import sys
 import datetime
@@ -39,6 +38,8 @@ from sickbeard import tvcache
 providerType = "nzb"
 providerName = "NZBsRUS"
 
+urllib._urlopener = classes.SickBeardURLopener()
+
 def isActive():
 	return sickbeard.NZBSRUS and sickbeard.USE_NZB
 
@@ -47,7 +48,7 @@ def getNZBsURL (url):
 	result = None
 
 	try:
-		f = urllib2.urlopen(url)
+		f = urllib.urlopen(url)
 		result = "".join(f.readlines())
 	except (urllib.ContentTooShortError, IOError), e:
 		logger.log("Error loading NZBs'R'US URL: " + str(sys.exc_info()) + " - " + str(e), logger.ERROR)
@@ -65,7 +66,7 @@ def downloadNZB (nzb):
 	if data == None:
 		return False
 	
-	fileName = os.path.join(sickbeard.NZB_DIR, nzb.extraInfo[0] + ".nzb")
+	fileName = os.path.join(sickbeard.NZB_DIR, nzb.name + ".nzb")
 	
 	logger.log("Saving to " + fileName, logger.DEBUG)
 	
@@ -76,49 +77,30 @@ def downloadNZB (nzb):
 	return True
 	
 	
-def findEpisode (episode, forceQuality=None, manualSearch=False):
-
-	if episode.status == DISCBACKLOG:
-		logger.log("NZBs'R'US doesn't support disc backlog. Use newzbin or download it manually from NZBs'R'US")
-		return []
+def searchRSS():
+	myCache = NZBsRUSCache()
+	myCache.updateCache()
+	return myCache.findNeededEpisodes()
+	
+def findEpisode (episode, manualSearch=False):
 
 	if sickbeard.NZBSRUS_UID in (None, "") or sickbeard.NZBSRUS_HASH in (None, ""):
 		raise exceptions.AuthException("NZBs'R'US authentication details are empty, check your config")
 
 	logger.log("Searching NZBs'R'US for " + episode.prettyName(True))
 
-	if forceQuality != None:
-		epQuality = forceQuality
-	elif episode.show.quality == BEST:
-		epQuality = ANY
-	else:
-		epQuality = episode.show.quality
-	
 	myCache = NZBsRUSCache()
 	myCache.updateCache()
 	
-	cacheResults = myCache.searchCache(episode.show, episode.season, episode.episode, epQuality)
-	logger.log("Cache results: "+str(cacheResults), logger.DEBUG)
-
-	nzbResults = []
-
-	for curResult in cacheResults:
-		
-		title = curResult["name"]
-		url = curResult["url"]
-	
-		logger.log("Found result " + title + " at " + url)
-
-		result = classes.NZBSearchResult(episode)
-		result.provider = providerName.lower()
-		result.url = url 
-		result.extraInfo = [title]
-		result.quality = epQuality
-		
-		nzbResults.append(result)
+	nzbResults = myCache.searchCache(episode, manualSearch)
+	logger.log("Cache results: "+str(nzbResults), logger.DEBUG)
 
 	return nzbResults
 		
+
+def findSeasonResults(show, season):
+	
+	return {}		
 
 def findPropers(date=None):
 
@@ -130,10 +112,11 @@ class NZBsRUSCache(tvcache.TVCache):
 	
 	def __init__(self):
 
+		tvcache.TVCache.__init__(self, providerName.lower())
+
 		# only poll NZBs'R'US every 15 minutes max
 		self.minTime = 15
 		
-		tvcache.TVCache.__init__(self, providerName.lower())
 	
 	def updateCache(self):
 
@@ -176,10 +159,6 @@ class NZBsRUSCache(tvcache.TVCache):
 
 			if not title or not url:
 				logger.log("The XML returned from the NZBs'R'US RSS feed is incomplete, this result is unusable: "+data, logger.ERROR)
-				continue
-			
-			if "subpack" in title.lower():
-				logger.log("This result appears to be a subtitle pack, ignoring: "+title, logger.ERROR)
 				continue
 			
 			url = url.replace('&amp;','&')

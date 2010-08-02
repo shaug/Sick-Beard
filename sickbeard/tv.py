@@ -20,10 +20,8 @@ from __future__ import with_statement
 
 import os.path
 import datetime
-import sqlite3
 import threading
 import urllib
-import urllib2
 import re
 import glob
 
@@ -36,25 +34,24 @@ from lib.tvnamer.utils import FileParser
 from lib.tvnamer import tvnamer_exceptions
 
 from sickbeard import db
-from sickbeard import helpers
-from sickbeard import exceptions
+from sickbeard import helpers, exceptions, logger
 from sickbeard import processTV
-from sickbeard import classes
 from sickbeard import tvrage
 from sickbeard import config
+from sickbeard import metadata
 
 from sickbeard import encodingKludge as ek
 
 from common import *
-from sickbeard import logger
 
 class TVShow(object):
 
-    def __init__ (self, showdir):
+    def __init__ (self, tvdbid):
     
-        self._location = os.path.normpath(showdir)
+        self.tvdbid = tvdbid
+
+        self._location = ""
         self.name = ""
-        self.tvdbid = 0
         self.tvrid = 0
         self.tvrname = ""
         self.network = ""
@@ -73,47 +70,11 @@ class TVShow(object):
         
         self.episodes = {}
 
-        # if the location doesn't exist, try the DB
-        if not os.path.isdir(self._location):
-            
-            self._isDirGood = False
-            
-            logger.log("The show dir "+self._location+" doesn't exist! This show will be inactive until the dir is created.", logger.ERROR)
-            
-            myDB = db.DBConnection()
-            sqlResults = myDB.select("SELECT * FROM tv_shows WHERE location = ?", [self._location])
-    
-            # if the location is in the DB, load it from the DB only
-            if len(sqlResults) > 0:
-                self.tvdbid = int(sqlResults[0]["tvdb_id"])
-                self.loadFromDB()
-            else:
-                raise exceptions.NoNFOException("Show folder doesn't exist")
-        
-        elif not ek.ek(os.path.isfile, ek.ek(os.path.join, self._location, "tvshow.nfo")):
-            
-            raise exceptions.NoNFOException("No NFO found in show dir")
-        
-        # if the location does exist then start with the NFO and load extra stuff from the DB
-        else:
-            
-            self._isDirGood = True
-            
-            self.loadNFO()
-
-            self.loadFromDB()
-    
         otherShow = helpers.findCertainShow(sickbeard.showList, self.tvdbid)
         if otherShow != None:
             raise exceptions.MultipleShowObjectsException("Can't create a show if it already exists")
         
-        #try:
-        #    t = tvdb_api.Tvdb(**sickbeard.TVDB_API_PARMS)
-        #    t[self.tvdbid]
-        #except tvdb_exceptions.tvdb_shownotfound, e:
-        #    raise exceptions.ShowNotFoundException(str(e))
-        #except tvdb_exceptions.tvdb_error, e:
-        #    logger.log("Unable to contact theTVDB.com, it might be down: "+str(e), logger.ERROR)
+        self.loadFromDB()
         
         self.saveToDB()
     
@@ -130,8 +91,8 @@ class TVShow(object):
             raise exceptions.NoNFOException("Show folder doesn't exist, you shouldn't be using it")
 
     def _setLocation(self, newLocation):
-        logger.log("Setter sets location to " + newLocation)
-        if ek.ek(os.path.isdir, newLocation) and ek.ek(os.path.isfile, ek.ek(os.path.join, newLocation, "tvshow.nfo")):
+        logger.log("Setter sets location to " + newLocation, logger.DEBUG)
+        if ek.ek(os.path.isdir, newLocation):
             self._location = newLocation
             self._isDirGood = True
         else:
@@ -146,8 +107,7 @@ class TVShow(object):
             for curEp in self.episodes[curSeason]:
                 myEp = self.episodes[curSeason][curEp]
                 if myEp not in sickbeard.comingList and \
-                myEp not in sickbeard.airingList and \
-                myEp not in sickbeard.missingList:
+                myEp not in sickbeard.airingList:
                     self.episodes[curSeason][curEp] = None
                     del myEp
             
@@ -177,10 +137,39 @@ class TVShow(object):
         
         return self.episodes[season][episode]
 
+    def writeShowNFO(self):
+
+        if not ek.ek(os.path.isdir, self._location):
+            logger.log(str(self.tvdbid) + ": Show dir doesn't exist, skipping NFO generation")
+            return
+
+        xmlData = metadata.makeShowNFO(self.tvdbid)
+            
+        # Make it purdy
+        helpers.indentXML( xmlData )
+    
+        nfo_fh = ek.ek(open, ek.ek(os.path.join, self._location, "tvshow.nfo"), 'w')
+        nfo = etree.ElementTree( xmlData )
+        nfo.write( nfo_fh, encoding="utf-8" )
+        nfo_fh.close()
+
+    def writeMetadata(self):
+        
+        if not ek.ek(os.path.isdir, self._location):
+            logger.log(str(self.tvdbid) + ": Show dir doesn't exist, skipping NFO generation")
+            return
+
+        if sickbeard.CREATE_IMAGES:
+            self.getImages()
+        
+        if sickbeard.CREATE_METADATA:
+            self.writeShowNFO()
+            self.writeEpisodeNFOs()
+
 
     def writeEpisodeNFOs (self):
         
-        if not os.path.isdir(self._location):
+        if not ek.ek(os.path.isdir, self._location):
             logger.log(str(self.tvdbid) + ": Show dir doesn't exist, skipping NFO generation")
             return
         
@@ -205,22 +194,7 @@ class TVShow(object):
         logger.log(str(self.tvdbid) + ": Loading all episodes from the show directory " + self._location)
 
         # get file list
-        files = []
-        if not self.seasonfolders:
-            files = ek.ek(os.listdir, unicode(self._location))
-        else:
-            for curFile in ek.ek(os.listdir, unicode(self._location)):
-                if not ek.ek(os.path.isdir, ek.ek(os.path.join, self._location, curFile)):
-                    continue
-                match = re.match("[Ss]eason\s*(\d+)", curFile)
-                if match != None:
-                    files += [ek.ek(os.path.join, curFile, x) for x in ek.ek(os.listdir, unicode(ek.ek(os.path.join, self._location, curFile)))]
-
-        # check for season folders
-        #logger.log("Resulting file list: "+str(files))
-    
-        # find all media files
-        mediaFiles = filter(sickbeard.helpers.isMediaFile, files)
+        mediaFiles = helpers.listMediaFiles(self._location)
 
         # create TVEpisodes from each media file (if possible)
         for mediaFile in mediaFiles:
@@ -364,14 +338,14 @@ class TVShow(object):
                 fanartData = helpers.getShowImage(fanartURL)
     
             if fanartData == None:
-                logger.log("Unable to retrieve fanart, skipping", logger.ERROR)
+                logger.log("Unable to retrieve fanart, skipping", logger.WARNING)
             else:
                 try:
                     outFile = ek.ek(open, ek.ek(os.path.join, self.location, "fanart.jpg"), 'wb')
                     outFile.write(fanartData)
                     outFile.close()
                 except IOError, e:
-                    logger.log("Unable to write fanart - are you sure the show folder is writable? "+str(e), logger.ERROR)
+                    logger.log("Unable to write fanart to "+ek.ek(os.path.join, self.location, "fanart.jpg")+" - are you sure the show folder is writable? "+str(e), logger.ERROR)
         
         # get the image data
         if not ek.ek(os.path.isfile, ek.ek(os.path.join, self.location, "folder.jpg")):
@@ -384,14 +358,14 @@ class TVShow(object):
                 posterData = helpers.getShowImage(posterURL)
     
             if posterData == None:
-                logger.log("Unable to retrieve poster, skipping", logger.ERROR)
+                logger.log("Unable to retrieve poster, skipping", logger.WARNING)
             else:
                 try:
                     outFile = ek.ek(open, ek.ek(os.path.join, self.location, "folder.jpg"), 'wb')
                     outFile.write(posterData)
                     outFile.close()
                 except IOError, e:
-                    logger.log("Unable to write fanart - are you sure the show folder is writable? "+str(e), logger.ERROR)
+                    logger.log("Unable to write poster to "+ek.ek(os.path.join, self.location, "folder.jpg")+" - are you sure the show folder is writable? "+str(e), logger.ERROR)
 
         seasonData = None 
         #  How many seasons? 
@@ -459,7 +433,7 @@ class TVShow(object):
             
             # make an episode out of it
         except exceptions.TVRageException, e:
-            logger.log("Unable to add TVRage info: " + str(e), logger.ERROR)
+            logger.log("Unable to add TVRage info: " + str(e), logger.WARNING)
             
 
 
@@ -479,16 +453,33 @@ class TVShow(object):
             logger.log("Unable to parse the filename "+file+" into a valid episode", logger.ERROR)
             return None
 
+        if len(epInfo.episodenumbers) == 0:
+            logger.log("No episode number found in "+file+", ignoring it", logger.ERROR)
+            return None
+
         # for now lets assume that any episode in the show dir belongs to that show
         season = epInfo.seasonnumber
+        episodes = epInfo.episodenumbers
         rootEp = None
 
-        for curEpNum in epInfo.episodenumbers:
+        # if we have an air-by-date show then get the real season/episode numbers
+        if season == -1:
+            try:
+                t = tvdb_api.Tvdb(**sickbeard.TVDB_API_PARMS)
+                epObj = t[self.tvdbid].airedOn(episodes[0])[0]
+                season = int(epObj["seasonnumber"])
+                episodes = [int(epObj["episodenumber"])]
+            except tvdb_exceptions.tvdb_episodenotfound, e:
+                logger.log("Unable to find episode with date "+str(episodes[0])+" for show "+self.name+", skipping", logger.WARNING)
+                return None
+
+        for curEpNum in episodes:
 
             episode = int(curEpNum)
             
             logger.log(str(self.tvdbid) + ": " + file + " parsed to " + self.name + " " + str(season) + "x" + str(episode), logger.DEBUG)
 
+            checkQualityAgain = False
             curEp = self.getEpisode(season, episode)
             
             if curEp == None:
@@ -497,7 +488,13 @@ class TVShow(object):
                 except exceptions.EpisodeNotFoundException:
                     logger.log(str(self.tvdbid) + ": Unable to figure out what this file is, skipping", logger.ERROR)
                     continue
+
             else:
+                # if there is a new file associated with this ep then re-check the quality
+                if ek.ek(os.path.normpath, curEp.location) != ek.ek(os.path.normpath, file):
+                    logger.log("The old episode had a different file associated with it, I will re-check the quality based on the new filename "+file, logger.DEBUG)
+                    checkQualityAgain = True
+                    
                 with curEp.lock:
                     curEp.location = file
                     curEp.checkForMetaFiles()
@@ -507,10 +504,39 @@ class TVShow(object):
             else:
                 rootEp.relatedEps.append(curEp)
 
-            if sickbeard.helpers.isMediaFile(file) and curEp.status not in (SNATCHED, SNATCHED_PROPER, SNATCHED_BACKLOG):
-                with curEp.lock:
-                    logger.log("STATUS: we have an associated file, so setting the status from "+str(curEp.status)+" to DOWNLOADED/" + str(DOWNLOADED), logger.DEBUG)
-                    curEp.status = DOWNLOADED
+            # if they replace a file on me I'll make some attempt at re-checking the quality
+            if checkQualityAgain:
+                newQuality = Quality.nameQuality(file)
+                logger.log("Since this file has been renamed, I checked "+file+" and found quality "+Quality.qualityStrings[newQuality], logger.DEBUG)
+                if newQuality != Quality.UNKNOWN:
+                    curEp.status = Quality.compositeStatus(DOWNLOADED, newQuality)
+
+
+            elif sickbeard.helpers.isMediaFile(file) and curEp.status not in Quality.DOWNLOADED:
+                
+                oldStatus, oldQuality = Quality.splitCompositeStatus(curEp.status)
+                newQuality = Quality.nameQuality(file)
+                if newQuality == Quality.UNKNOWN:
+                    newQuality = Quality.assumeQuality(file)
+                newStatus = None
+                
+                # if it was snatched and now exists then set the status correctly
+                if oldStatus == SNATCHED and oldQuality <= newQuality:
+                    logger.log("STATUS: this ep used to be snatched with quality "+Quality.qualityStrings[oldQuality]+" but a file exists with quality "+Quality.qualityStrings[newQuality]+" so I'm setting the status to DOWNLOADED", logger.DEBUG)
+                    newStatus = DOWNLOADED
+                
+                # if it was snatched proper and we found a higher quality one then allow the status change
+                elif oldStatus == SNATCHED_PROPER and oldQuality < newQuality:
+                    logger.log("STATUS: this ep used to be snatched proper with quality "+Quality.qualityStrings[oldQuality]+" but a file exists with quality "+Quality.qualityStrings[newQuality]+" so I'm setting the status to DOWNLOADED", logger.DEBUG)
+                    newStatus = DOWNLOADED
+
+                elif oldStatus not in (SNATCHED, SNATCHED_PROPER):
+                    newStatus = DOWNLOADED
+                
+                if newStatus != None:
+                    with curEp.lock:
+                        logger.log("STATUS: we have an associated file, so setting the status from "+str(curEp.status)+" to DOWNLOADED/" + str(Quality.statusFromName(file)), logger.DEBUG)
+                        curEp.status = Quality.compositeStatus(newStatus, newQuality)
                         
             with curEp.lock:
                 curEp.saveToDB()
@@ -560,10 +586,11 @@ class TVShow(object):
             self.quality = int(sqlResults[0]["quality"])
             self.seasonfolders = int(sqlResults[0]["seasonfolders"])
             self.paused = int(sqlResults[0]["paused"])
+            try:
+                self.location = sqlResults[0]["location"]
+            except exceptions.NoNFOException:
+                pass
 
-            if self.tvdbid == 0:
-                self.tvdbid = int(sqlResults[0]["tvdb_id"])
-                
             if self.tvrid == 0:
                 self.tvrid = int(sqlResults[0]["tvr_id"])
     
@@ -581,6 +608,11 @@ class TVShow(object):
         t = tvdb_api.Tvdb(**ltvdb_api_parms)
         myEp = t[self.tvdbid]
         
+        self.name = myEp["seriesname"]
+
+        self.genre = myEp['genre']
+        self.network = myEp['network']
+    
         if myEp["airs_dayofweek"] != None and myEp["airs_time"] != None:
             self.airs = myEp["airs_dayofweek"] + " " + myEp["airs_time"]
 
@@ -694,6 +726,9 @@ class TVShow(object):
         if not os.path.isdir(self._location):
             return False
         
+        # load from dir
+        self.loadEpisodesFromDir()
+            
         # run through all locations from DB, check that they exist
         logger.log(str(self.tvdbid) + ": Loading all episodes with a location from the database")
         
@@ -711,28 +746,19 @@ class TVShow(object):
                 logger.log("The episode was deleted while we were refreshing it, moving on to the next one", logger.DEBUG)
                 continue
             
-            # if the path doesn't exist
-            # or if there's no season folders and it's not inside our show dir 
-            # or if there are season folders and it's in the main dir:
-            # or if it's not in our show dir at all
-            if not ek.ek(os.path.isfile, curLoc) or \
-            (not self.seasonfolders and os.path.normpath(os.path.dirname(curLoc)) != os.path.normpath(self.location)) or \
-            (self.seasonfolders and os.path.normpath(os.path.dirname(curLoc)) == os.path.normpath(self.location)) or \
-            os.path.normpath(os.path.commonprefix([os.path.normpath(x) for x in (curLoc, self.location)])) != os.path.normpath(self.location):
+            # if the path doesn't exist or if it's not in our show dir
+            if not ek.ek(os.path.isfile, curLoc) or not os.path.normpath(curLoc).startswith(os.path.normpath(self.location)):
             
                 logger.log(str(self.tvdbid) + ": Location for " + str(season) + "x" + str(episode) + " doesn't exist, removing it and changing our status to SKIPPED", logger.DEBUG)
                 with curEp.lock:
                     curEp.location = ''
-                    if curEp.status == DOWNLOADED:
+                    if curEp.status in Quality.DOWNLOADED:
                         curEp.status = SKIPPED
                     curEp.hasnfo = False
                     curEp.hastbn = False
                     curEp.saveToDB()
 
         
-        # load from dir
-        self.loadEpisodesFromDir()
-            
             
     def fixEpisodeNames(self):
 
@@ -849,10 +875,80 @@ class TVShow(object):
         return toReturn
 
         
+    def wantEpisode(self, season, episode, quality, manualSearch=False):
+        
+        logger.log("Checking if we want episode "+str(season)+"x"+str(episode)+" at quality "+Quality.qualityStrings[quality], logger.DEBUG)
+
+        # if the quality isn't one we want under any circumstances then just say no
+        anyQualities, bestQualities = Quality.splitQuality(self.quality)
+        logger.log("A,B = "+str(anyQualities)+" "+str(bestQualities)+" and we are "+str(quality), logger.DEBUG)
+        
+        if quality not in anyQualities + bestQualities:
+            return False
+
+        myDB = db.DBConnection()
+        sqlResults = myDB.select("SELECT status FROM tv_episodes WHERE showid = ? AND season = ? AND episode = ?", [self.tvdbid, season, episode])
+        
+        if not sqlResults or not len(sqlResults):
+            logger.log("Unable to find the episode", logger.DEBUG)
+            return False
+        
+        epStatus = int(sqlResults[0]["status"])
+
+        # if we know we don't want it then just say no
+        if epStatus in (SKIPPED, IGNORED, ARCHIVED) and not manualSearch:
+            logger.log("Ep is skipped, not bothering", logger.DEBUG)
+            return False
+
+        # if it's one of these then we want it as long as it's in our allowed initial qualities
+        if quality in anyQualities + bestQualities:
+            if epStatus in (WANTED, UNAIRED, SKIPPED):
+                logger.log("Ep is wanted/unaired/skipped, definitely get it", logger.DEBUG)
+                return True
+            elif epStatus in (IGNORED, ARCHIVED) and manualSearch:
+                logger.log("Ep is ignored/archived and you manually searched so overriding the default and allowing the quality", logger.DEBUG)
+                return True
+        
+        curStatus, curQuality = Quality.splitCompositeStatus(epStatus)
+        
+        # if we are re-downloading then we only want it if it's in our bestQualities list and better than what we have
+        if curStatus in Quality.SNATCHED + Quality.DOWNLOADED and quality in bestQualities and quality > curQuality:
+            logger.log("We already have this ep but the new one is better quality, saying yes", logger.DEBUG)
+            return True
+
+        logger.log("None of the conditions were met so I'm just saying no", logger.DEBUG)
+        return False
         
         
-        
-        
+    def getOverview(self, epStatus):
+
+        anyQualities, bestQualities = Quality.splitQuality(self.quality)
+        if bestQualities:
+            maxBestQuality = max(bestQualities)
+        else:
+            maxBestQuality = None 
+    
+        if epStatus == WANTED:
+            return Overview.WANTED
+        elif epStatus in (UNAIRED, UNKNOWN):
+            return Overview.UNAIRED
+        elif epStatus in (SKIPPED, IGNORED):
+            return Overview.SKIPPED
+        elif epStatus == ARCHIVED:
+            return Overview.GOOD
+        elif epStatus in Quality.DOWNLOADED + Quality.SNATCHED + Quality.SNATCHED_PROPER:
+            epStatus, curQuality = Quality.splitCompositeStatus(epStatus)
+            
+            # if they don't want re-downloads then we call it good if they have anything
+            if maxBestQuality == None:
+                return Overview.GOOD
+            # if they have one but it's not the best they want then mark it as qual
+            elif curQuality < maxBestQuality:
+                return Overview.QUAL
+            # if it's >= maxBestQuality then it's good
+            else:
+                return Overview.GOOD
+
         
 class TVEpisode:
 
@@ -982,7 +1078,7 @@ class TVEpisode:
         except (tvdb_exceptions.tvdb_error, IOError), e:
             logger.log("TVDB threw up an error: "+str(e), logger.DEBUG)
             # if the episode is already valid just log it, if not throw it up
-            if self.name != "" and self.airdate != datetime.date.fromordinal(1):
+            if self.name:
                 logger.log("TVDB timed out but we have enough info from other sources, allowing the error", logger.DEBUG)
                 return
             else:
@@ -996,7 +1092,7 @@ class TVEpisode:
             return
 
             
-        if myEp["firstaired"] == None and season == 0:
+        if not myEp["firstaired"]:
             myEp["firstaired"] = str(datetime.date.fromordinal(1))
             
         if myEp["episodename"] == None or myEp["episodename"] == "":
@@ -1006,13 +1102,6 @@ class TVEpisode:
                 self.deleteEpisode()
             return False
 
-        if myEp["firstaired"] == None or myEp["firstaired"] == "":
-            logger.log("This episode ("+self.show.name+" - "+str(season)+"x"+str(episode)+") has no air date on TVDB")
-            # if I'm incomplete on TVDB but I once was complete then just delete myself from the DB for now
-            if self.tvdbid != -1:
-                self.deleteEpisode()
-            return False
-        
         #NAMEIT logger.log("BBBBBBBB from " + str(self.season)+"x"+str(self.episode) + " -" +self.name+" to "+myEp["episodename"])
         self.name = myEp["episodename"]
         self.season = season
@@ -1036,18 +1125,21 @@ class TVEpisode:
             logger.log("The show dir is missing, not bothering to change the episode statuses since it'd probably be invalid")
             return
 
-        logger.log(str(self.show.tvdbid) + ": Setting status for " + str(season) + "x" + str(episode) + " based on status " + statusStrings[self.status] + " and existence of " + self.location, logger.DEBUG)
+        logger.log(str(self.show.tvdbid) + ": Setting status for " + str(season) + "x" + str(episode) + " based on status " + str(self.status) + " and existence of " + self.location, logger.DEBUG)
         
         if not ek.ek(os.path.isfile, self.location):
 
             # if we don't have the file
-            if self.airdate >= datetime.date.today() and self.status not in (SNATCHED, SNATCHED_PROPER, SNATCHED_BACKLOG, PREDOWNLOADED):
+            if self.airdate >= datetime.date.today() and self.status not in Quality.SNATCHED + Quality.SNATCHED_PROPER:
                 # and it hasn't aired yet set the status to UNAIRED
                 logger.log("Episode airs in the future, changing status from " + str(self.status) + " to " + str(UNAIRED), logger.DEBUG)
                 self.status = UNAIRED
+            elif self.airdate == datetime.date.fromordinal(1):
+                logger.log("Episode has no air date, automatically marking it skipped", logger.DEBUG)
+                self.status = SKIPPED
             else:
                 if self.status == UNAIRED:
-                    self.status = MISSED
+                    self.status = WANTED
     
                 # if we somehow are still UNKNOWN then just skip it
                 elif self.status == UNKNOWN:
@@ -1056,9 +1148,9 @@ class TVEpisode:
         # if we have a media file then it's downloaded
         elif sickbeard.helpers.isMediaFile(self.location):
             # leave propers alone, you have to either post-process them or manually change them back
-            if self.status not in (SNATCHED_PROPER, PREDOWNLOADED):
-                logger.log("5 Status changes from " + str(self.status) + " to " + str(DOWNLOADED), logger.DEBUG)
-                self.status = DOWNLOADED
+            if self.status not in Quality.SNATCHED_PROPER + Quality.DOWNLOADED + Quality.SNATCHED + [ARCHIVED]:
+                logger.log("5 Status changes from " + str(self.status) + " to " + str(Quality.statusFromName(self.location)), logger.DEBUG)
+                self.status = Quality.statusFromName(self.location)
 
         # shouldn't get here probably
         else:
@@ -1083,8 +1175,8 @@ class TVEpisode:
         
             if self.status == UNKNOWN:
                 if sickbeard.helpers.isMediaFile(self.location):
-                    logger.log("7 Status changes from " + str(self.status) + " to " + str(DOWNLOADED), logger.DEBUG)
-                    self.status = DOWNLOADED
+                    logger.log("7 Status changes from " + str(self.status) + " to " + str(Quality.statusFromName(self.location)), logger.DEBUG)
+                    self.status = Quality.statusFromName(self.location)
         
             nfoFile = sickbeard.helpers.replaceExtension(self.location, "nfo")
             logger.log(str(self.show.tvdbid) + ": Using NFO name " + nfoFile, logger.DEBUG)
@@ -1117,8 +1209,12 @@ class TVEpisode:
                     if self.description == None:
                         self.description = ""
                     
-                    rawAirdate = [int(x) for x in epDetails.findtext('aired').split("-")]
-                    self.airdate = datetime.date(rawAirdate[0], rawAirdate[1], rawAirdate[2])
+                    if epDetails.findtext('aired'):
+                        rawAirdate = [int(x) for x in epDetails.findtext('aired').split("-")]
+                        self.airdate = datetime.date(rawAirdate[0], rawAirdate[1], rawAirdate[2])
+                    else:
+                        self.airdate = datetime.date.fromordinal(1)
+                        
                     self.hasnfo = True
             else:
                 self.hasnfo = False
@@ -1241,7 +1337,10 @@ class TVEpisode:
             episodenum.text = str(curEpToWrite.episode)
             
             aired = etree.SubElement( episode, "aired" )
-            aired.text = str(curEpToWrite.airdate)
+            if curEpToWrite.airdate != datetime.date.fromordinal(1):
+                aired.text = str(curEpToWrite.airdate)
+            else:
+                aired.text = ''
     
             plot = etree.SubElement( episode, "plot" )
             if curEpToWrite.description != None:
@@ -1377,7 +1476,7 @@ class TVEpisode:
 
     def deleteEpisode(self):
 
-        logger.log("Deleting "+self.show.name+" "+str(self.season)+"x"+str(self.episode))
+        logger.log("Deleting "+self.show.name+" "+str(self.season)+"x"+str(self.episode)+" from the DB", logger.DEBUG)
         
         # remove myself from the show dictionary
         if self.show.getEpisode(self.season, self.episode, noCreate=True) == self:
@@ -1391,9 +1490,6 @@ class TVEpisode:
         if self in sickbeard.comingList:
             logger.log("Removing myself from the coming list", logger.DEBUG)
             sickbeard.comingList.remove(self)
-        if self in sickbeard.missingList:
-            logger.log("Removing myself from the missing list", logger.DEBUG)
-            sickbeard.missingList.remove(self)
         
         # delete myself from the DB
         logger.log("Deleting myself from the database", logger.DEBUG)
@@ -1432,8 +1528,11 @@ class TVEpisode:
         else:
             return os.path.join(self.show.location, self.location)
         
+    def getOverview(self):
+        return self.show.getOverview(self.status)
+        
     def prettyName (self, naming_show_name=None, naming_ep_type=None, naming_multi_ep_type=None,
-                    naming_ep_name=None, naming_sep_type=None, naming_use_periods=None):
+                    naming_ep_name=None, naming_sep_type=None, naming_use_periods=None, naming_quality=None):
         
         regex = "(.*) \(\d\)"
 
@@ -1486,7 +1585,13 @@ class TVEpisode:
         if naming_use_periods == None:
             naming_use_periods = sickbeard.NAMING_USE_PERIODS
         
-        goodEpString = config.naming_ep_type[naming_ep_type] % {'seasonnumber': self.season, 'episodenumber': self.episode}
+        if naming_quality == None:
+            naming_quality = sickbeard.NAMING_QUALITY
+        
+        if self.show.genre and "Talk Show" in self.show.genre and sickbeard.NAMING_DATES:
+            goodEpString = str(self.airdate)
+        else:
+            goodEpString = config.naming_ep_type[naming_ep_type] % {'seasonnumber': self.season, 'episodenumber': self.episode}
         
         for relEp in self.relatedEps:
             goodEpString += config.naming_multi_ep_type[naming_multi_ep_type][naming_ep_type] % {'seasonnumber': relEp.season, 'episodenumber': relEp.episode}
@@ -1503,12 +1608,15 @@ class TVEpisode:
 
         if naming_ep_name:
             finalName += goodName
+
+        if naming_quality:
+            epStatus, epQual = Quality.splitCompositeStatus(self.status)
+            if epQual != Quality.NONE:
+                finalName += config.naming_sep_type[naming_sep_type] + Quality.qualityStrings[epQual]
         
         if naming_use_periods:
             finalName = re.sub("\s+", ".", finalName)
 
         return finalName
-        
-        
         
         

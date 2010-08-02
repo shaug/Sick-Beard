@@ -19,26 +19,24 @@
 
 import StringIO
 import gzip
-import os.path
-import os
-import sqlite3
-import codecs
+import os.path, os, glob
 import urllib, urllib2
 import re
 
 import sickbeard
 
 from sickbeard.exceptions import *
-from sickbeard import logger
+from sickbeard import logger, classes
 from sickbeard.common import *
 
 from sickbeard import db
+from sickbeard import encodingKludge as ek
 
 from lib.tvdb_api import tvdb_api, tvdb_exceptions
 
 import xml.etree.cElementTree as etree
 
-import string
+urllib._urlopener = classes.SickBeardURLopener()
 
 def indentXML(elem, level=0):
 	'''
@@ -69,86 +67,24 @@ def replaceExtension (file, newExt):
 		return sepFile[0] + "." + newExt
 
 def isMediaFile (file):
+	# ignore samples
+	if re.search('(^|[\W_])sample\d*[\W_]', file):
+		return False
+	
 	sepFile = file.rpartition(".")
 	if sepFile[2].lower() in mediaExtensions:
 		return True
 	else:
 		return False
 
-def sanitizeSceneName (name):
-	for x in ":()'!":
-		name = name.replace(x, "")
-
-	name = name.replace("- ", ".").replace(" ", ".").replace("&", "and")
-	name = re.sub("\.\.*", ".", name)	
-	
-	return name
-		
 def sanitizeFileName (name):
-	for x in ":\\/*":
+	for x in "\\/*":
 		name = name.replace(x, "-")
-	for x in "\"<>|?":
+	for x in ":\"<>|?":
 		name = name.replace(x, "")
 	return name
 		
 
-def sceneToNormalShowNames(name):
-	
-	return [name, name.replace(".and.", ".&.")]
-
-def allPossibleShowNames(show):
-
-	showNames = [show.name]
-
-	if int(show.tvdbid) in sceneExceptions:
-		showNames += sceneExceptions[int(show.tvdbid)]
-	
-	# if we have a tvrage name then use it
-	if show.tvrname != "" and show.tvrname != None:
-		showNames.append(show.tvrname)
-
-	newShowNames = []
-
-	# if we have "Show Name Australia" or "Show Name (Australia)" this will add "Show Name (AU)" for
-	# any countries defined in common.countryList
-	for curName in showNames:
-		for curCountry in countryList:
-			if curName.endswith(' '+curCountry):
-				logger.log("Show names ends with "+curCountry+", so trying to add ("+countryList[curCountry]+") to it as well", logger.DEBUG)
-				newShowNames.append(curName.replace(' '+curCountry, ' ('+countryList[curCountry]+')'))
-			elif curName.endswith(' ('+curCountry+')'):
-				logger.log("Show names ends with "+curCountry+", so trying to add ("+countryList[curCountry]+") to it as well", logger.DEBUG)
-				newShowNames.append(curName.replace(' ('+curCountry+')', ' ('+countryList[curCountry]+')'))
-
-	showNames += newShowNames
-
-	return showNames
-
-def makeSceneShowSearchStrings(show):
-
-	showNames = allPossibleShowNames(show)
-
-	# eliminate duplicates and scenify the names
-	return map(sanitizeSceneName, showNames)
-
-
-def makeSceneSearchString (episode):
-
-	# see if we should use dates instead of episodes
-	if "Talk Show" in episode.show.genre:
-		epString = '.' + str(episode.airdate).replace('-', '.')
-	else:
-		epString = ".S%02iE%02i" % (int(episode.season), int(episode.episode))
-
-	showNames = makeSceneShowSearchStrings(episode.show)
-
-	toReturn = []
-
-	for curShow in showNames:
-		toReturn.append(curShow + epString)
-
-	return toReturn
-	
 def getGZippedURL (f):
 	compressedResponse = f.read()
 	compressedStream = StringIO.StringIO(compressedResponse)
@@ -185,9 +121,9 @@ def findCertainTVRageShow (showList, tvrid):
 	
 	
 def makeDir (dir):
-	if not os.path.isdir(dir.encode('utf-8')):
+	if not ek.ek(os.path.isdir, dir):
 		try:
-			os.makedirs(dir.encode('utf-8'))
+			ek.ek(os.makedirs, dir)
 		except OSError:
 			return False
 	return True
@@ -364,7 +300,8 @@ def getShowImage(url, imgNum=None):
 
 	logger.log("Getting show image at "+tempURL, logger.DEBUG)
 	try:
-		imgFile = urllib2.urlopen(tempURL)
+		req = urllib2.Request(tempURL, headers={'User-Agent': classes.SickBeardURLopener().version})
+		imgFile = urllib2.urlopen(req)
 	except urllib2.URLError, e:
 		logger.log("There was an error trying to retrieve the image, aborting", logger.ERROR)
 		return None
@@ -385,8 +322,27 @@ def getShowImage(url, imgNum=None):
 
 	return imgData
 
-def guessSceneEpisodeQuality(name):
-	if '720p' in name or '1080p' in name:
-		return HD
-	else:
-		return SD
+
+def sizeof_fmt(num):
+	for x in ['bytes','KB','MB','GB','TB']:
+		if num < 1024.0:
+			return "%3.1f %s" % (num, x)
+		num /= 1024.0
+
+def listMediaFiles(dir):
+
+	if not dir or not ek.ek(os.path.isdir, dir):
+		return []
+
+	files = []
+	for curFile in ek.ek(os.listdir, dir):
+		fullCurFile = ek.ek(os.path.join, dir, curFile)
+
+		# if it's a dir do it recursively
+		if ek.ek(os.path.isdir, fullCurFile) and not curFile.startswith('.'):
+			files += listMediaFiles(fullCurFile)
+	
+		elif isMediaFile(curFile):
+			files.append(fullCurFile)
+
+	return files

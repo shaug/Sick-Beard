@@ -22,17 +22,16 @@ import operator
 import sickbeard
 
 from sickbeard import db
-from sickbeard import classes
-from sickbeard import common
+from sickbeard import classes, common, helpers, logger, sceneHelpers
 from sickbeard import providers
-from sickbeard import helpers
-from sickbeard import logger
 from sickbeard import search
 from sickbeard import history
 
 from sickbeard.common import *
 
 from sickbeard.tv import TVEpisode
+
+from lib.tvdb_api import tvdb_api, tvdb_exceptions
 
 from lib.tvnamer.utils import FileParser
 from lib.tvnamer import tvnamer_exceptions
@@ -92,6 +91,7 @@ class ProperFinder():
 
         for curProper in sortedPropers:
 
+            # parse the file name
             try:
                 myParser = FileParser(curProper.name)
                 epInfo = myParser.parse()
@@ -99,10 +99,14 @@ class ProperFinder():
                 logger.log("Unable to parse the filename "+curProper.name+" into a valid episode", logger.ERROR)
                 continue
     
+            if not epInfo.episodenumbers:
+                logger.log("Ignoring "+curProper.name+" because it's for a full season rather than specific episode", logger.DEBUG)
+                continue
+    
+            # populate our Proper instance
             curProper.season = epInfo.seasonnumber
             curProper.episode = epInfo.episodenumbers[0]
-    
-            curProper.quality = helpers.guessSceneEpisodeQuality(curProper.name)
+            curProper.quality = Quality.nameQuality(curProper.name)
     
             # for each show in our list
             for curShow in sickbeard.showList:
@@ -110,7 +114,7 @@ class ProperFinder():
                 genericName = self._genericName(epInfo.seriesname)
         
                 # get the scene name masks
-                sceneNames = set(helpers.makeSceneShowSearchStrings(curShow))
+                sceneNames = set(sceneHelpers.makeSceneShowSearchStrings(curShow))
         
                 # for each scene name mask
                 for curSceneName in sceneNames:
@@ -129,6 +133,30 @@ class ProperFinder():
                 if curProper.tvdbid != -1:
                     break
 
+            if curProper.tvdbid == -1:
+                continue
+
+            # if we have an air-by-date show then get the real season/episode numbers
+            if curProper.season == -1 and curProper.tvdbid:
+                try:
+                    t = tvdb_api.Tvdb(**sickbeard.TVDB_API_PARMS)
+                    epObj = t[curProper.tvdbid].airedOn(curProper.episode)[0]
+                    season = int(epObj["seasonnumber"])
+                    episodes = [int(epObj["episodenumber"])]
+                except tvdb_exceptions.tvdb_episodenotfound, e:
+                    logger.log("Unable to find episode with date "+str(curProper.episode)+" for show "+epInfo.seriesname+", skipping", logger.WARNING)
+                    continue
+
+            # check if we actually want this proper (if it's the right quality)
+            sqlResults = db.DBConnection().select("SELECT status FROM tv_episodes WHERE showid = ? AND season = ? AND episode = ?", [curProper.tvdbid, curProper.season, curProper.episode])
+            if not sqlResults:
+                continue
+            oldStatus, oldQuality = Quality.splitCompositeStatus(int(sqlResults[0]["status"]))
+            
+            # only keep the proper if we have already retrieved the same quality ep (don't get better/worse ones) 
+            if oldStatus not in (DOWNLOADED, SNATCHED) or oldQuality != curProper.quality:
+                continue
+
             # if the show is in our list and there hasn't been a proper already added for that particular episode then add it to our list of propers
             if curProper.tvdbid != -1 and (curProper.tvdbid, curProper.season, curProper.episode) not in map(operator.attrgetter('tvdbid', 'season', 'episode'), finalPropers):
                 logger.log("Found a proper that we need: "+str(curProper.name))
@@ -144,8 +172,8 @@ class ProperFinder():
 
             # make sure the episode has been downloaded before
             myDB = db.DBConnection() 
-            historyResults = myDB.select("SELECT resource FROM history WHERE showid = ? AND season = ? AND episode = ? AND quality = ? AND action = ? AND date >= ?",
-                        [curProper.tvdbid, curProper.season, curProper.episode, curProper.quality, common.ACTION_SNATCHED, historyLimit.strftime(history.dateFormat)])
+            historyResults = myDB.select("SELECT resource FROM history WHERE showid = ? AND season = ? AND episode = ? AND quality = ? AND action IN ("+",".join([str(x) for x in Quality.SNATCHED])+") AND date >= ?",
+                        [curProper.tvdbid, curProper.season, curProper.episode, curProper.quality, historyLimit.strftime(history.dateFormat)])
              
             # if we didn't download this episode in the first place we don't know what quality to use for the proper so we can't do it
             if len(historyResults) == 0:
@@ -172,11 +200,11 @@ class ProperFinder():
                 epObj = showObj.getEpisode(curProper.season, curProper.episode)
                 
                 # make the result object
-                result = classes.SearchResult(epObj)
+                result = classes.SearchResult([epObj])
                 result.url = curProper.url
                 result.provider = curProper.provider.providerName.lower()
                 result.resultType = curProper.provider.providerType
-                result.extraInfo = [curProper.name]
+                result.name = curProper.name
                 result.quality = curProper.quality
                 
                 # snatch it

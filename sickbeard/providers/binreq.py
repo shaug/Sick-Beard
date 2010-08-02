@@ -19,7 +19,6 @@
 
 
 import urllib
-import urllib2
 import os.path
 import sys
 import datetime
@@ -39,6 +38,8 @@ from sickbeard import tvcache
 providerType = "nzb"
 providerName = "BinReq"
 
+urllib._urlopener = classes.SickBeardURLopener()
+
 def isActive():
 	return sickbeard.BINREQ and sickbeard.USE_NZB
 
@@ -47,7 +48,7 @@ def getBinReqURL (url):
 	result = None
 
 	try:
-		f = urllib2.urlopen(url)
+		f = urllib.urlopen(url)
 		result = "".join(f.readlines())
 	except (urllib.ContentTooShortError, IOError), e:
 		logger.log("Error loading Bin-Req URL: " + str(sys.exc_info()) + " - " + str(e), logger.ERROR)
@@ -60,7 +61,7 @@ def downloadNZB (nzb):
 
 	logger.log("Downloading an NZB from Bin-Req at " + nzb.url)
 
-	fileName = os.path.join(sickbeard.NZB_DIR, nzb.extraInfo[0] + ".nzb.gz")
+	fileName = os.path.join(sickbeard.NZB_DIR, nzb.name + ".nzb.gz")
 	
 	logger.log("Saving to " + fileName, logger.DEBUG)
 
@@ -69,46 +70,25 @@ def downloadNZB (nzb):
 	return True
 	
 	
+def searchRSS():
+	myCache = BinReqCache()
+	myCache.updateCache()
+	return myCache.findNeededEpisodes()
+	
 def findEpisode (episode, forceQuality=None, manualSearch=False):
-
-	if episode.status == DISCBACKLOG:
-		logger.log("Bin-Req doesn't support disc backlog. Use newzbin or download it manually from Bin-Req")
-		return []
 
 	logger.log("Searching Bin-Req for " + episode.prettyName(True))
 
-	if forceQuality != None:
-		epQuality = forceQuality
-	elif episode.show.quality == BEST:
-		epQuality = ANY
-	else:
-		epQuality = episode.show.quality
-	
 	myCache = BinReqCache()
 	myCache.updateCache()
-	
-	cacheResults = myCache.searchCache(episode.show, episode.season, episode.episode, epQuality)
-	logger.log("Cache results: "+str(cacheResults), logger.DEBUG)
-
-	nzbResults = []
-
-	for curResult in cacheResults:
-		
-		title = curResult["name"]
-		url = curResult["url"]
-	
-		logger.log("Found result " + title + " at " + url)
-
-		result = classes.NZBSearchResult(episode)
-		result.provider = providerName.lower()
-		result.url = url 
-		result.extraInfo = [title]
-		result.quality = epQuality
-		
-		nzbResults.append(result)
+	nzbResults = myCache.searchCache(episode, manualSearch)
+	logger.log("Cache results: "+str(nzbResults), logger.DEBUG)
 
 	return nzbResults
-		
+
+def findSeasonResults(show, season):
+	
+	return {}		
 
 def findPropers(date=None):
 
@@ -167,10 +147,6 @@ class BinReqCache(tvcache.TVCache):
 				continue
 			
 			url = url.replace('view.php', 'download.php')
-			
-			if "subpack" in title.lower():
-				logger.log("This result appears to be a subtitle pack, ignoring: "+title, logger.ERROR)
-				continue
 			
 			url = url.replace('&amp;','&')
 

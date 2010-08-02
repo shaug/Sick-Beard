@@ -9,6 +9,7 @@
 """Utilities for tvnamer, including filename parsing
 """
 
+import datetime
 import os
 import re
 import sys
@@ -16,7 +17,7 @@ import shutil
 import logging
 import platform
 
-from lib.tvdb_api.tvdb_api import (tvdb_error, tvdb_shownotfound, tvdb_seasonnotfound,
+from lib.tvdb_api.tvdb_api import (tvdb_error, tvdb_shownotfound, tvdb_seasonnotfound, 
 tvdb_episodenotfound, tvdb_attributenotfound, tvdb_userabort)
 
 from unicode_helper import p
@@ -59,6 +60,23 @@ def getEpisodeName(tvdb_instance, episode):
     else:
         # Series was found, use corrected series name
         correctedShowName = show['seriesname']
+
+    if episode.seasonnumber == -1:
+        # Date-based episode
+        epnames = []
+        for cepno in episode.episodenumbers:
+            try:
+                sr = show.airedOn(cepno)
+                if len(sr) > 1:
+                    raise EpisodeNotFound(
+                        "Ambigious air date %s, there were %s episodes on that day" % (
+                        cepno, len(sr)))
+                epnames.append(sr[0]['episodename'])
+            except tvdb_episodenotfound:
+                raise EpisodeNotFound(
+                    "Episode that aired on %s could not be found" % (
+                    cepno))
+        return correctedShowName, epnames
 
     if episode.seasonnumber is None:
         # Series without concept of seasons have all episodes in season 1
@@ -120,6 +138,12 @@ def applyCustomOutputReplacements(cfile):
     """Applies custom output filename replacements, wraps _applyReplacements
     """
     return _applyReplacements(cfile, Config['output_filename_replacements'])
+
+
+def applyCustomFullpathReplacements(cfile):
+    """Applies custom replacements to full path, wraps _applyReplacements
+    """
+    return _applyReplacements(cfile, Config['move_files_fullpath_replacements'])
 
 
 def cleanRegexedSeriesName(seriesname):
@@ -262,6 +286,19 @@ class FileParser(object):
                 elif 'episodenumber' in namedgroups:
                     episodenumbers = [int(match.group('episodenumber')), ]
 
+                elif 'seasonnumberonly' in namedgroups:
+                    episodenumbers = []
+
+                elif 'year' in namedgroups or 'month' in namedgroups or 'day' in namedgroups:
+                    if not all(['year' in namedgroups, 'month' in namedgroups, 'day' in namedgroups]):
+                        raise ConfigValueError(
+                            "Date-based regex must contain groups 'year', 'month' and 'day'")
+                    match.group('year')
+
+                    episodenumbers = [datetime.date(int(match.group('year')),
+                                                    int(match.group('month')),
+                                                    int(match.group('day')))]
+
                 else:
                     raise ConfigValueError(
                         "Regex does not contain episode number group, should"
@@ -271,6 +308,10 @@ class FileParser(object):
 
                 if 'seasonnumber' in namedgroups:
                     seasonnumber = int(match.group('seasonnumber'))
+                elif 'year' in namedgroups and 'month' in namedgroups and 'day' in namedgroups:
+                    seasonnumber = -1
+                elif 'seasonnumberonly' in namedgroups:
+                    seasonnumber = int(match.group('seasonnumberonly'))
                 else:
                     # No season number specified, usually for Anime
                     seasonnumber = None
@@ -284,10 +325,16 @@ class FileParser(object):
                 if seriesname != None:
                     seriesname = cleanRegexedSeriesName(seriesname)
 
+                if 'episodename' in namedgroups:
+                    episodename = match.group('episodename')
+                else:
+                    episodename = None
+
                 episode = EpisodeInfo(
                     seriesname = seriesname,
                     seasonnumber = seasonnumber,
                     episodenumbers = episodenumbers,
+                    episodename = episodename,
                     filename = self.path)
                 return episode
         else:
@@ -368,7 +415,7 @@ def makeValidFilename(value, normalize_unicode = False, windows_safe = False, cu
         # : is technically allowed, but Finder will treat it as / and will
         # generally cause weird behaviour, so treat it as invalid.
         blacklist = r"/:"
-    elif sysname == 'Linux':
+    elif sysname in ['Linux', 'FreeBSD']:
         blacklist = r"/"
     else:
         # platform.system docs say it could also return "Windows" or "Java".
@@ -476,7 +523,10 @@ class EpisodeInfo(object):
         episode_separator # used to join multiple episode numbers
         """
         # Format episode number into string, or a list
-        epno = formatEpisodeNumbers(self.episodenumbers)
+        if self.seasonnumber != -1:
+            epno = formatEpisodeNumbers(self.episodenumbers)
+        else:
+            epno = str(self.episodenumbers[0])
 
         # Data made available to config'd output file format
         if self.extension is None:
@@ -492,8 +542,10 @@ class EpisodeInfo(object):
             'ext': prep_extension}
 
         if self.episodename is None:
-            if self.seasonnumber is None:
+            if self.seasonnumber in (None, -1):
                 fname = Config['filename_without_episode_no_season'] % epdata
+            elif not self.episodenumbers:
+                fname = Config['filename_season_only_without_episode'] % epdata
             else:
                 fname = Config['filename_without_episode'] % epdata
         else:
@@ -503,8 +555,10 @@ class EpisodeInfo(object):
                     join_with = Config['multiep_join_name_with']
                 )
 
-            if self.seasonnumber is None:
+            if self.seasonnumber in (None, -1):
                 fname = Config['filename_with_episode_no_season'] % epdata
+            elif not self.episodenumbers:
+                fname = Config['filename_season_only_with_episode'] % epdata
             else:
                 fname = Config['filename_with_episode'] % epdata
 
@@ -554,7 +608,7 @@ class Renamer(object):
         os.rename(self.filename, newpath)
         self.filename = newpath
 
-    def newPath(self, new_path, force = False, always_copy = False, always_move = False, create_dirs = True):
+    def newPath(self, new_path, force = False, always_copy = False, always_move = False, create_dirs = True, getPathPreview = False):
         """Moves the file to a new path.
 
         If it is on the same partition, it will be moved (unless always_copy is True)
@@ -573,8 +627,18 @@ class Renamer(object):
         # Join new filename onto new filepath
         new_fullpath = os.path.join(new_dir, old_filename)
 
+        if len(Config['move_files_fullpath_replacements']) > 0:
+            p("Before custom full path replacements: %s" % (new_fullpath))
+            new_fullpath = applyCustomFullpathReplacements(new_fullpath)
+            new_dir = os.path.dirname(new_fullpath)
+
+        p("New path: %s" % new_fullpath)
+
+        if getPathPreview:
+            return new_fullpath
+
         if create_dirs:
-            print "Creating %s" % new_dir
+            p("Creating %s" % new_dir)
             try:
                 os.makedirs(new_dir)
             except OSError, e:
@@ -590,19 +654,19 @@ class Renamer(object):
         if same_partition(self.filename, new_dir):
             if always_copy:
                 # Same partition, but forced to copy
-                print "copy %s to %s" % (self.filename, new_fullpath)
+                p("copy %s to %s" % (self.filename, new_fullpath))
                 shutil.copyfile(self.filename, new_fullpath)
             else:
                 # Same partition, just rename the file to move it
-                print "move %s to %s" % (self.filename, new_fullpath)
+                p("move %s to %s" % (self.filename, new_fullpath))
                 os.rename(self.filename, new_fullpath)
         else:
             # File is on different partition (different disc), copy it
-            print "copy %s to %s" % (self.filename, new_fullpath)
+            p("copy %s to %s" % (self.filename, new_fullpath))
             shutil.copyfile(self.filename, new_fullpath)
             if always_move:
                 # Forced to move file, we just trash old file
-                print "Deleting %s" % (self.filename)
+                p("Deleting %s" % (self.filename))
                 delete_file(self.filename)
 
         self.filename = new_fullpath

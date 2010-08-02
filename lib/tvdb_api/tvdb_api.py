@@ -16,23 +16,35 @@ Example usage:
 u'Cabin Fever'
 """
 __author__ = "dbr/Ben"
-__version__ = "1.4"
+__version__ = "1.5"
 
 import os
 import sys
 import urllib
 import urllib2
+import StringIO
 import tempfile
 import warnings
 import logging
 import datetime
+import time
 
 try:
     import xml.etree.cElementTree as ElementTree
 except ImportError:
     import xml.etree.ElementTree as ElementTree
 
-import lib.httplib2 as httplib2
+try:
+    import gzip
+except ImportError:
+    gzip = None
+
+
+# Use local version for sickbeard, system version elsewhere
+try:
+    import lib.httplib2 as httplib2
+except ImportError:
+    import httplib2 as httplib2
 
 from tvdb_ui import BaseUI, ConsoleUI
 from tvdb_exceptions import (tvdb_error, tvdb_userabort, tvdb_shownotfound,
@@ -43,6 +55,31 @@ lastTimeout = None
 def log():
     return logging.getLogger("tvdb_api")
 
+def clean_cache(cachedir):
+    '''
+    Clean any files in the cache older than 24 hrs
+    '''
+
+    # Does our cachedir exists
+    if not os.path.isdir(cachedir):
+	log().debug("Told to clean cache dir %s but it does not exist" %
+		cachedir)
+	return
+    now = time.time()
+    day = 86400
+
+    # Get all our cache files
+    files = os.listdir(cachedir)
+
+    for file in files:
+	ffile = os.path.join(cachedir,file)
+	# If modified time is > 24 hrs ago, die!
+	# log().debug("Comparing %s mtime" % ffile)
+	if now - os.stat(ffile).st_mtime > day:
+	    try:
+		os.remove(ffile)
+	    except:
+		raise tvdb_error("Couldn't remove %s" % ffile)
 
 class ShowContainer(dict):
     """Simple dict that holds a series of Show instances
@@ -80,6 +117,12 @@ class Show(dict):
             # If it's not numeric, it must be an attribute name, which
             # doesn't exist, so attribute error.
             raise tvdb_attributenotfound("Cannot find attribute %s" % (repr(key)))
+
+    def airedOn(self, date):
+        ret = self.search(str(date), 'firstaired')
+        if len(ret) == 0:
+            raise tvdb_episodenotfound("Could not find any episodes that aired on %s" % date)
+        return ret
 
     def search(self, term = None, key = None):
         """
@@ -369,6 +412,11 @@ class Tvdb:
 	else:
             self.config['cache_enabled'] = False
 
+	# Clean cache, this might need to be moved elsewhere
+	if self.config['cache_enabled'] and self.config['cache_location']:
+	    # log().debug("Cleaning cache %s " % self.config['cache_location'])
+	    clean_cache(self.config['cache_location'])
+
         self.config['banners_enabled'] = banners
         self.config['actors_enabled'] = actors
 
@@ -459,11 +507,11 @@ class Tvdb:
 	    good error.  Failed hitting %s, error message: %s" % (url,
 		str(errormsg)))
         #end try
-
+        
         return str(resp)
 
     def _getetsrc(self, url):
-        """Loads a URL sing caching, returns an ElementTree of the source
+        """Loads a URL using caching, returns an ElementTree of the source
         """
         src = self._loadUrl(url)
         try:
@@ -577,7 +625,7 @@ class Tvdb:
         >>> t['scrubs']['_banners'].keys()
         ['fanart', 'poster', 'series', 'season']
         >>> t['scrubs']['_banners']['poster']['680x1000']['35308']['_bannerpath']
-        'http://www.thetvdb.com/banners/posters/76156-2.jpg'
+        u'http://www.thetvdb.com/banners/posters/76156-2.jpg'
         >>>
 
         Any key starting with an underscore has been processed (not the raw
@@ -638,7 +686,7 @@ class Tvdb:
         >>> actors[0]['name']
         u'Zach Braff'
         >>> actors[0]['image']
-        'http://www.thetvdb.com/banners/actors/43640.jpg'
+        u'http://www.thetvdb.com/banners/actors/43640.jpg'
 
         Any key starting with an underscore has been processed (not the raw
         data from the XML)

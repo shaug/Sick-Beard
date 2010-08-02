@@ -27,7 +27,10 @@ from common import *
 
 from sickbeard import providers
 
-class AuthURLOpener(urllib.FancyURLopener):
+class SickBeardURLopener(urllib.FancyURLopener):
+    version = "Sick Beard/alpha2"
+
+class AuthURLOpener(SickBeardURLopener):
     def __init__(self, user, pw):
         self.username = user
         self.password = pw
@@ -43,17 +46,18 @@ class AuthURLOpener(urllib.FancyURLopener):
 
     def openit(self, url):
         self.numTries = 0
-        return urllib.FancyURLopener.open(self, url)
+        return SickBeardURLopener.open(self, url)
 
 class SearchResult:
 
-    def __init__(self, episode):
+    def __init__(self, episodes):
         self.provider = -1
         self.url = ""
         self.extraInfo = []
-        self.episode = episode
+        self.episodes = episodes
         self.predownloaded = False
         self.quality = -1
+        self.name = ""
 
     def __str__(self):
         
@@ -69,11 +73,13 @@ class SearchResult:
         return myString
 
     def fileName(self):
-        return self.episode.prettyName(True) + "." + self.resultType
+        return self.episodes[0].prettyName(True) + "." + self.resultType
 
 class NZBSearchResult(SearchResult):
     resultType = "nzb"
 
+class NZBDataSearchResult(SearchResult):
+    resultType = "nzbdata"
 
 class TorrentSearchResult(SearchResult):
     resultType = "torrent"

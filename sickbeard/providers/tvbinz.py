@@ -45,7 +45,9 @@ def isActive():
 
 def getTVBinzURL (url):
 
-	searchHeaders = {"Cookie": "uid=" + sickbeard.TVBINZ_UID + ";hash=" + sickbeard.TVBINZ_HASH + ";auth=" + sickbeard.TVBINZ_AUTH, 'Accept-encoding': 'gzip'}
+	searchHeaders = {"Cookie": "uid=" + sickbeard.TVBINZ_UID + ";hash=" + sickbeard.TVBINZ_HASH + ";auth=" + sickbeard.TVBINZ_AUTH,
+					 'Accept-encoding': 'gzip',
+					 'User-Agent': classes.SickBeardURLopener().version}
 	req = urllib2.Request(url=url, headers=searchHeaders)
 	
 	try:
@@ -68,7 +70,7 @@ def downloadNZB (nzb):
 	if data == None:
 		return False
 	
-	fileName = os.path.join(sickbeard.NZB_DIR, nzb.extraInfo[0] + ".nzb")
+	fileName = os.path.join(sickbeard.NZB_DIR, nzb.name + ".nzb")
 	
 	logger.log("Saving to " + fileName, logger.DEBUG)
 	
@@ -79,51 +81,43 @@ def downloadNZB (nzb):
 	return True
 	
 	
-def findEpisode (episode, forceQuality=None, manualSearch=False):
+def searchRSS():
+	myCache = TVBinzCache()
+	myCache.updateCache()
+	foundResults = myCache.findNeededEpisodes()
+	
+	# append auth
+	urlParams = {'i': sickbeard.TVBINZ_SABUID, 'h': sickbeard.TVBINZ_HASH}
 
-	if episode.status == DISCBACKLOG:
-		logger.log("TVbinz doesn't support disc backlog. Use Newzbin or download it manually from TVbinz")
-		return []
+	for curEp in foundResults:
+		for curResult in foundResults[curEp]:
+			curResult.url += "&" + urllib.urlencode(urlParams)			
+
+	return foundResults
+	
+def findEpisode (episode, manualSearch=False):
 
 	if sickbeard.TVBINZ_UID in (None, "") or sickbeard.TVBINZ_HASH in (None, "") or sickbeard.TVBINZ_AUTH in (None, ""):
 		raise exceptions.AuthException("TVBinz authentication details are empty, check your config")
 	
 	logger.log("Searching tvbinz for " + episode.prettyName(True))
 
-	if forceQuality != None:
-		epQuality = forceQuality
-	elif episode.show.quality == BEST:
-		epQuality = ANY
-	else:
-		epQuality = episode.show.quality
-	
 	myCache = TVBinzCache()
-	
 	myCache.updateCache()
-	
-	cacheResults = myCache.searchCache(episode.show, episode.season, episode.episode, epQuality)
-	logger.log("Cache results: "+str(cacheResults), logger.DEBUG)
+	nzbResults = myCache.searchCache(episode, manualSearch)
+	logger.log("Cache results: "+str(nzbResults), logger.DEBUG)
 
-	nzbResults = []
-
-	for curResult in cacheResults:
-		
-		title = curResult["name"]
-		url = curResult["url"]
-		urlParams = {'i': sickbeard.TVBINZ_SABUID, 'h': sickbeard.TVBINZ_HASH}
-	
-		logger.log("Found result " + title + " at " + url)
-
-		result = classes.NZBSearchResult(episode)
-		result.provider = 'tvbinz'
-		result.url = url + "&" + urllib.urlencode(urlParams) 
-		result.extraInfo = [title]
-		result.quality = epQuality
-		
-		nzbResults.append(result)
+	# append auth
+	urlParams = {'i': sickbeard.TVBINZ_SABUID, 'h': sickbeard.TVBINZ_HASH}
+	for curResult in nzbResults:
+		curResult.url += "&" + urllib.urlencode(urlParams) 
 
 	return nzbResults
 		
+
+def findSeasonResults(show, season):
+	
+	return {}		
 
 def findPropers(date=None):
 
@@ -191,14 +185,8 @@ class TVBinzCache(tvcache.TVCache):
 
 			logger.log("Adding item from RSS to cache: "+title, logger.DEBUG)			
 
-			quality = sInfo.findtext('{http://tvbinz.net/rss/tvb/}quality')
-			if quality == "HD":
-				quality = HD
-			else:
-				quality = SD
+			quality = Quality.nameQuality(title)
 			
-			season = int(sInfo.findtext('{http://tvbinz.net/rss/tvb/}seasonNum'))
-
 			if sInfo.findtext('{http://tvbinz.net/rss/tvb/}tvrID') == None:
 				tvrid = 0
 			else:
@@ -206,5 +194,4 @@ class TVBinzCache(tvcache.TVCache):
 			
 			# since TVBinz normalizes the scene names it's more reliable to parse the episodes out myself
 			# than to rely on it, because it doesn't support multi-episode numbers in the feed
-			self._addCacheEntry(title, url, season, tvrage_id=tvrid, quality=quality)
-
+			self._addCacheEntry(title, url, tvrage_id=tvrid, quality=quality)
